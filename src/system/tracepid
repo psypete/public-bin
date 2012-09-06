@@ -1,0 +1,102 @@
+#!/usr/bin/perl
+# tracepid - trace a process back to its parent and give terse output
+# Copyright (C) 2009 Peter Willis <peterwwillis@yahoo.com>
+
+use strict;
+
+if ( ! @ARGV ) {
+    die "Usage: $0 PID [..]\nTraces the parent processes of a given PID file and gives brief information about the process.\n";
+}
+
+foreach my $pid (@ARGV) {
+    print tracepid($pid);
+}
+
+# When passed a pid number, this subroutine will recursively
+# parse all parent processes and return an indented report of
+# all parents and some basic information for troubleshooting.
+# Only tested on linux 2.6
+sub tracepid {
+    my $pid = shift;
+    my ($fh, @pids, @bufs);
+    my $level = 0;
+    my $quit = 0;
+
+    if ( ! -d "/proc/$pid" ) {
+        return("Process $pid no longer exists\n");
+    }
+
+    # Unrolled loops recursion
+    @pids = ($pid);
+    while ( @pids ) {
+
+        my @tpids;
+        foreach my $pid (@pids) {
+            if ( $pid !~ /^\d+$/ ) {
+                return("Invalid pid \"$pid\"\n");
+            }
+	    # End loop if pid doesn't exist or pid is equal to 1
+	    # (no reason why we have to show pid 1's status every time)
+            if ( ! -d "/proc/$pid" or $pid eq "1" ) {
+                $quit = 1;
+                last;
+            }
+
+            open($fh, "</proc/$pid/status");
+            my $st = join('', <$fh>);
+            close($fh);
+            open($fh, "</proc/$pid/cmdline");
+            my $cmd = join('', <$fh>);
+            close($fh);
+            $cmd =~ s/[^[:print:]]+?/ /g;
+            $cmd =~ s/^\s+//g;
+            $cmd =~ s/\s+$//g;
+	    my $path = readlink("/proc/$pid/exe");
+
+            if ( $st =~ /^Name:\s(.+)\nState:.+\nTgid:.+\nPid:\s(\d+)\nPPid:\s(\d+)\nTracerPid:.+\nUid:\s(\d+)\s+(\d+)\s.+?\nGid:\s(\d+)\s+(\d+)\s.+?\nFDSize:\s.+\nGroups:\s(.*)\nVmPeak/sg ) {
+                my ($name, $pid, $ppid, $uid, $euid, $gid, $egid, $groups) = ($1, $2, $3, $4, $5, $6, $7, $8);
+		$uid = getpwuid($uid) || $uid;
+		$euid = getpwuid($euid) || $euid;
+		$gid = getgrgid($gid) || $gid;
+		$egid = getgrgid($egid) || $egid;
+                $groups =~ s/\s+/ /g;
+
+		# If uid or gid don't match their respective effective IDs,
+		# mention them with a comma.
+		if ( $uid ne $euid ) {
+			$uid .= ",$euid";
+		}
+		if ( $gid ne $egid ) {
+			$gid .= ",$egid";
+		}
+
+		# Here we check if the exe path was in our $ENV{PATH}, and if
+		# not, someone either ran this by hand or this cold be a
+		# potential exploit, so report the found exe path
+		if ( defined $path and $path =~ /^(.+)\/[^\/]+$/ ) {
+			if ( !grep(/^\Q$1\E$/,split(/:/,$ENV{PATH})) ) {
+				$name = "$path->$name";
+			}
+		}
+
+		# Record to print out
+		push(@bufs, "\000[$pid] $name($uid:$gid) \"$cmd\"");
+
+                # Recurse the parent process id
+                push(@tpids, $ppid);
+            }
+        }
+        last if $quit;
+
+        $level++;
+        @pids = @tpids;
+
+    }
+
+    # Prefix each entry with spaces and print in reverse order
+    $level = 0;
+
+    return( join("", map { s/\000/"  "x$level/eg; $level++; "$_\n" } reverse @bufs) );
+
+}
+

@@ -1,0 +1,74 @@
+#!/bin/sh
+# slack_pkg - handle packaging of a built application in `pwd`/_install
+# Copyright (C) 2007  Peter Willis <peterwwillis@yahoo.com>
+if [ ! -n "$ARCH" ] ; then
+    if [ `uname -m` = "x86_64" ] ; then
+        PKGARCH="x86_64"
+    else
+        PKGARCH="i486"
+    fi
+fi
+
+[ -n "$INSTALL" ] || INSTALL=0
+
+function gnome_schema_install_cleanup() {
+        mkdir install 2>/dev/null
+        for SCHEMA in etc/gconf/schemas/* ; do
+                echo "GCONF_CONFIG_SOURCE=\`gconftool-2 --get-default-source\` gconftool-2 --makefile-install-rule \"$SCHEMA\"" >> install/doinst.sh
+        done
+        chmod 755 install/doinst.sh
+}
+
+function devise_build_number() {
+        BPREFIX="$1"
+        BPOSTFIX="$2"
+        BUILDNUM=1
+        while [ true ] ; do
+                if [ -e "$BASE-$BUILDNUM$BPOSTFIX" ] ; then
+                        BUILDNUM=$((BUILDNUM+1))
+                else
+                        echo "$BPREFIX$BUILDNUM$BPOSTFIX"
+                        break
+                fi
+        done
+}
+
+function slack_pkg() {
+	DIR="`pwd`" &&
+	PKGNM=`basename "$DIR"` &&
+	NAME=`devise_build_number "$DIR/$PKGNM-${PKGARCH}-" sbt.tgz`
+	
+	cd _install && {
+		if [ -d etc/gconf/schemas ] ; then
+			gnome_schema_install_cleanup
+		fi
+		true
+	} &&
+	makepkg -c n -l y "$NAME"
+	if [ $? -eq 0 ] ; then
+		echo "CREATED PACKAGE \"$NAME\"!"
+		cd ..
+		rm -r _install
+		chown $USER:$GROUP "$NAME"
+		if [ $INSTALL -eq 1 ] ; then
+			echo "INSTALLING PACKAGE \"$NAME\" ..."
+			upgradepkg --install-new "$NAME"
+			[ $? -eq 0 ] && echo "PACKAGE \"$NAME\" INSTALLED SUCCESSFULLY"
+		fi
+
+	else
+		echo "CREATING PACKAGE \"$NAME\" FAILED"
+		exit 1
+	fi
+}
+
+
+if [ $# -gt 0 -o ! -d "_install" ] ; then
+	echo "Error: slack_pkg is intended to be used from a directory with compiled source"
+	echo "code prepared with 'slackmake'."
+	echo "Are you sure you didn't want to use 'slackpack' ?"
+	exit 1
+fi
+
+slack_pkg
+

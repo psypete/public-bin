@@ -1,0 +1,44 @@
+#!/bin/sh
+# dhcp-off - stop dhcp on a given interface
+# Copyright (C) 2009 Peter Willis <peterwwillis@yahoo.com>
+# 
+# In some cases these defaults are more sane than dhcpcd's.
+# For wireless interfaces and the general configuration of the system it's not
+# always nice to overwrite default system settings every time you visit a new
+# network. These settings assist that as well as make it easier to get an IP
+# on an interface without worrying about the fine details.
+# 
+
+DHCPCD="/sbin/dhcpcd"
+# Get some basic feedback from the app
+DEBUG="-d"
+# Default directory for dhcpcd's temporary/state files.
+# If commented out defaults to /etc/dhcpc/INTERFACE/
+#STATE_DIR="-L /etc/dhcpc"
+# Run this script when dhcpcd configures or brings down an interface
+#IP_UPDOWN_SCRIPT="-c /etc/dhcpc/dhcpcd.exe"
+# Where to create resolv.conf, ntp.conf and yp.conf.
+# If commented out defaults to /etc/dhcpc/INTERFACE/
+#ETC_DIR="/etc/dhcpc"
+
+function dhcp_off_intf() {
+    local intf="$1"
+    local state="-L /etc/dhcpc/$intf"
+    local etc="$state"
+    [ -n "$STATE_DIR" ] && state="$STATE_DIR"
+    [ -n "$ETC_DIR" ] && etc="$ETC_DIR"
+    echo "$0: $intf"
+    echo "$0: $intf" | logger
+    sudo $DHCPCD -k $intf $DEBUG $state $IP_UPDOWN_SCRIPT $etc &>/dev/null &
+}
+
+if [ $# -eq 0 ] ; then
+  echo "Usage: $0 INTERFACE [..]"
+  echo "Stops dhcp on a given interface"
+  exit 1
+fi
+
+for intf in "$@" ; do
+    dhcp_off_intf "$intf"
+done
+

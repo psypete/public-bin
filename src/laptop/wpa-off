@@ -1,0 +1,35 @@
+#!/bin/sh
+# wpa-off - turn wpa_supplicant on
+# Copyright (C) 2009 Peter Willis <peterwwillis@yahoo.com>
+# 
+# Stop wpa_supplicant
+
+function wpa_off() {
+    local intf="$1"
+    local pidfile="/var/run/wpa_supplicant-$intf.pid"
+    echo "$0: $intf"
+    echo "$0: $intf" | logger
+    pid=`cat $pidfile 2>/dev/null`
+    if [ -n "$pid" ] ; then
+        sudo kill -15 $pid
+        sleep 1
+        sudo kill -9 $pid 2>/dev/null
+    fi
+}
+
+if [ "$1" = "-h" -o "$1" = "--help" ] ; then
+    echo "Usage: $0 [INTERFACE ..]"
+    echo "Turns wpa_supplicant off."
+    exit 1
+fi
+
+if [ $# -lt 1 ] ; then
+    for a in `/sbin/iwconfig 2>&1 | grep IEEE | awk '{print $1}'` ; do
+        wpa_off "$a"
+    done
+else
+    for a in "$@" ; do
+        wpa_off "$a"
+    done
+fi
+

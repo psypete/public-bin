@@ -1,0 +1,541 @@
+#!/usr/bin/perl
+# getppmp3 v0.9 - get projectplaylist.com mp3's
+# Copyright (C) 2007-2008 Peter Willis <peterwwillis@yahoo.com>
+
+# Changes since 0.08:
+#   - Fixed url and artist/title parsing
+#     (hopefully for good? or until a site redesign)
+#   - Fixed playlist downloading
+#   - Cleaned up filename detection
+# Changes since 0.07:
+#   - Improve MP3 detection
+#   - Prevent crashing on invalid XML when grabbing playlists
+# Changes since 0.06:
+#   - Fix playlist grep to work with any domain matching URL regex
+#   - Clean up empty files left by wget (404's usually)
+#   - Fix "title -- artist" filename format
+#   - Try to auto-detect MP3s
+# Changes since 0.05:
+#   - Add support for scraping playlists from pages
+#   - Make wget try only 3 times for a file
+# Chances since 0.04:
+#   - Fix search to work with new HTML interface
+#   - Support artist and title searches
+# Changes since 0.03:
+#   - Fix method of renaming files, so no more 928327.mp3 filenames
+#   - Fix a bug that prevented most search results from returning
+#   - Ensure $EXTENSION is only appended once
+#   - New default behvior is to skip an existing file
+#   - Detect when wget is killed by the user, prompt to continue
+#   - Cleaned up "search" result text
+# Changes since 0.02:
+#   - No longer depend on LWP::Simple
+#   - Use wget if it's available
+# Changes since 0.01:
+#   - Check artist/title result for original search string
+#   - Support previous behavior with -g (greedy) option
+
+$|=1;
+
+print <<EOF;
+This program can search for and download MP3s on a certain social music website.
+This program is purely an experiment in utilizing a Service provided to the
+public for the 
+You the user assume all liability by using this
+program. I the author provide no warranty expressed or implied about anything.
+Use this program at your own risk. You have been warned.
+
+Pass this program the -s option first if you just want to search for music,
+or leave the option out and supply text to search for music with (enclosed in
+quotes). Files are downloaded to the current directory.
+
+EOF
+
+use strict;
+use LWP::UserAgent;
+use XML::Parser;
+use URI::Escape;
+
+my @SEARCHES;
+my $SEARCH_URL = 'http://search.playlist.com/tracks/';
+my $TEST = 0;
+my $NOFLIP = 0;
+my $NOVERIFY = 0;
+my $GREEDY = 0;
+my $ARTISTSEARCH = 0;
+my $TITLESEARCH = 0;
+my $encryption_key = "sdf883jsdf22"; # Home row much?? :)
+
+for ( @ARGV ) {
+	if ( /^-s$/ ) {
+		$TEST = 1;
+	} elsif ( /^-g$/ ) {
+		$GREEDY = 0;
+	} elsif ( /^-t/ ) {
+		$ARTISTSEARCH = 0;
+		$TITLESEARCH = 1;
+	} elsif ( /^-a/ ) {
+		$ARTISTSEARCH = 1;
+		$TITLESEARCH = 0;
+	} elsif ( /^-n/ ) {
+		$NOFLIP = 1;
+	} elsif ( /^-V/ ) {
+		$NOVERIFY = 1;
+	} else {
+		push @SEARCHES, $_;
+	}
+}
+
+if ( ! @SEARCHES ) {
+	die "Usage: $0 [OPTIONS] SEARCHSTRING [..]\n\n  Options:\n    -s\t\tDon't do anything, just search for files to download\n    -n\t\tDon't auto-correct filenames\n    -V\t\tDon't verify that file is an mp3\n    -g\t\tGreedily download all MP3s, regardless of artist/title\n    -t\t\tTitle search\n    -a\t\tArtist search\n\nIf you provide a URL instead of a search string, that will be grepped for a playlist to download.\n";
+}
+
+foreach my $search (@SEARCHES) {
+
+	my $urls;
+
+	# Look for a playlist if it's a URL
+	if ( $search =~ /^http:\/\//i ) {
+		$urls = parse_xml_urls($search);
+	} else {
+		my $search_string = uri_escape($search);
+		$search_string =~ s/\%20/-/g; # projectplaylist likes this...
+		my $uri_search = $SEARCH_URL . $search_string;
+		$urls = search_urls($uri_search, $search);
+	}
+
+	download($urls, $search);
+
+}
+
+# URLs i've found that lead to playlists;
+# (the third one is what you're redirected to from the first one)
+# (the second one is a single xml file which is what we want)
+#  - http://www.playlist.com/loadplaylist.php?playlist=957012
+#  - http://www.musicplaylist.net/loadplaylist.php?playlist=17931078&time=20071226092506
+#  - http://www.projectplaylist.com/node/957012/playlist/xspf
+sub parse_xml_urls {
+	my $page = shift;
+	
+	print "INFO: Downloading page \"$page\" ...\n";
+	my $UA = LWP::UserAgent->new;
+	$UA->timeout(60); # Basic default timeout
+	my $CONTENT = $UA->get($page)->content;
+	my %urls;
+
+	print "INFO: Checking page $page for playlists...\n";
+
+	while ( $CONTENT =~ /(http:\/\/[^\/]+\/loadplaylist\.php\?playlist=(\d+))/img ) {
+		my ($url, $id) = ($1, $2);
+
+		print "INFO: Fetching playlist \"http://www.musicplaylist.net/loadplaylist.php?playlist=$id\"\n";
+
+		my $XMLstring = $UA->get("http://www.musicplaylist.net/loadplaylist.php?playlist=$id")->content || die "Error: couldn't get XML: $!\n";
+
+		# Yes, for some reason the XML parser is crashing on some weird
+		# HTML restriction...
+		
+		# First remove binary crap
+		$XMLstring =~ s/[^[:print:][:space:]]+//img;
+
+		# The following is messy but it works fairly well
+		# Catch these two:
+		$XMLstring =~ s/&amp;/__;AMP;__/img;
+		$XMLstring =~ s/&#(\d+);/__;DIGIT:$1;__/img;
+
+		# Now remove everything with &;, which should be all examples
+		# with & if it is "correct" XML... i think
+		$XMLstring =~ s/&[^;]+;//img;
+
+		# Now put back the saved ones
+		$XMLstring =~ s/__;AMP;__/&amp;/img;
+		$XMLstring =~ s/__;DIGIT:(\d+);__/&#$1;/img;
+
+		my $a = new XML::Parser(Style => "Tree")->parse($XMLstring);
+
+		# I know, I know... I blame XML::Parser.
+		for ( my $i=0; $i<@$a; $i++ ) {
+			# Look for 'playlist'
+			if ( $a->[$i] eq "playlist" ) {
+
+				my $pl_aref = $a->[++$i];
+				# Look for 'trackList'
+				for ( my $j=0; $j<@$pl_aref; $j++ ) {
+					if ( $pl_aref->[$j] eq "trackList" ) {
+						my $tl_aref = $pl_aref->[++$j];
+						for ( my $k=0; $k<@$tl_aref; $k++ ) {
+							if ( $tl_aref->[$k] eq "track" ) {
+								my $track = $tl_aref->[++$k];
+								my ($url, $annotation_s);
+								for ( my $l=0; $l<@$track; $l++ ) {
+									if ( $track->[$l] eq "location" ) {
+										my $location = $track->[++$l];
+										for ( my $m=0; $m<@$location; $m++ ) {
+											if ( $location->[$m] =~ /^([0-9a-f]+|http:\/\/.+)$/ ) {
+												$url = $1;
+												print "location: $url\n";
+											}
+										}
+									} elsif ( $track->[$l] eq "annotation" ) {
+										my $annotation = $track->[++$l];
+										for ( my $m = 0; $m < @{ $annotation }; $m++ ) {
+											print "annotation: $annotation->[$m]\n";
+											if ( $annotation->[$m] =~ /(\w+|\-\-)/ ) {
+												$annotation_s = $annotation->[$m];
+											}
+										}
+									}
+								}
+								print "final url: $url\nfinal annotation: $annotation_s\n";
+								if ( defined $url and !exists $urls{$url} ) {
+									if ( defined $annotation_s ) {
+										$urls{$url} = $annotation_s;
+									} else {
+										$urls{$url} = 1;
+									}
+								}
+							}
+						}
+					}
+				}
+
+				last;
+			}
+		}
+	}
+
+	if ( keys(%urls) < 1 ) {
+		print "Error: Found no playlists or the server was unresponsive.\nError: Please try again or check that the page has a valid playlist on it.\n";
+	}
+
+	return(\%urls);
+}
+
+sub search_urls {
+
+	my $uri = shift;
+	my $search = shift;
+	my $last_page = 1;
+	my %urls;
+
+	for ( my $page = 1; $page <= $last_page; $page++ ) {
+
+		my $uripage = "$uri/$page";
+		print "INFO: Fetching page \"$uripage\"\n";
+		my $CONTENT = LWP::UserAgent->new()->get($uripage)->content;
+
+		my $foundpages = 0;
+		my $founddup = 0;
+
+		# First, grab URLs
+		#while ( $CONTENT =~ /onclick="loadPlayer\('([0-9a-f]+)'.+class="sr_album-title">([^<]+)<\/h2>.+Artist: ([^<]+)<\/div>/img ) {
+		while ( $CONTENT =~ /^(.*onclick="loadPlayer\('([0-9a-f]+)'.*$)/img ) {
+
+			my $line= $1;
+			my $url = $2;
+			my $_content = $line;
+			#my $searchmatch = "$artist - $title";
+			my $duplicate = 0;
+			my ($artist, $title, $searchmatch);
+
+			# Let's extract the artist/title without looking at the html at all
+			$_content =~ s/<.+?>/ /g;
+			$_content =~ s/\s+/ /g;
+			$_content =~ s/^\s+//g;
+
+			# Usual format: "Titlename (visit site) Artist: Artistname"
+			if ( $_content =~ /^(.+)\(visit site\)(.+)$/ or $_content =~ /^(.+)Artist:(.+)$/ ) {
+				($title, $artist) = ($1, $2);
+
+				$title =~ s/\(visit site\)//g;
+				$artist =~ s/Artist://g;
+
+				$title =~ s/\s+/ /g;
+				$title =~ s/^\s+//g;
+				$title =~ s/\s+$//g;
+
+				$artist =~ s/\s+/ /g;
+				$artist =~ s/^\s+//g;
+				$artist =~ s/\s+$//g;
+
+				$searchmatch = "$artist - $title";
+			} else {
+				# Just incase...
+				$_content =~ s/\(visit site\)/-/g;
+				$_content =~ s/Artist:/-/g;
+				$_content =~ s/\s+/ /g;
+				$_content =~ s/^\s+//g;
+				$_content =~ s/\s+$//g;
+
+				$searchmatch = $_content; # let's hope it came out like "Title -- Artist", or at least "Title - Artist",
+							  # Which would be incorrect but still ledgible
+			}
+
+			# We only use $artist/$title for simple matching, assuming
+			# there won't be a non-ASCII char in those matched names,
+			# so only parse $searchmatch for the non-ASCII crap
+			if ( defined $searchmatch and length($searchmatch) > 0 ) {
+				$searchmatch =~ s/\&\#(\d+)\;/chr($1)/eg; # convert "&#039;" to "'"
+				$searchmatch =~ s/\&[^;]\;//g; # remove "&amp;" and shit
+			}
+
+			# Make sure we aren't copying a dup
+			while ( my ($url_k,$url_v) = each %urls ) {
+				# Don't mark as a dupe if $url_v is empty (there'd be no file name so it's invalid)
+				if ( $url_k eq $url and length($url_v) > 0 ) {
+					$duplicate = 1;
+				}
+			}
+
+			# Only match if the search result has our search string
+			if ( $GREEDY == 0 and
+				(
+					( $ARTISTSEARCH && $artist !~ /$search/i ) ||
+					( $TITLESEARCH && $title !~ /$search/i ) ||
+					( $searchmatch !~ /$search/i )
+				)
+			) {
+				next;
+			}
+
+			if ( ! $duplicate ) {
+				$urls{$url} = $searchmatch;
+				$foundpages++;
+			} else {
+				$founddup++;
+			}
+
+		}
+
+		# Now look for the "real" last page
+		while ( $CONTENT =~ /<a href="([^"]+)" rel="end" /mg ) {
+			my $searchpage = $1;
+			if ( $searchpage =~ /\/(\d+)$/ ) {
+				$last_page = $1;
+				last;
+			}
+		}
+
+	}
+
+	return(\%urls);
+
+}
+
+sub download {
+
+	my $urls = shift;
+	my $search = shift;
+	my $EXTENSION = ".mp3";
+
+	foreach my $url ( keys %{$urls} ) {
+		my $origurl = $url;
+		my $filename;
+
+		# Yes, they really do encrypt some URLs, even though your browser just downloads the mp3 file later.
+		if ( $url =~ /^[0-9a-fA-F]+$/ ) {
+			my $binary = pack("H*", $url);
+			$url = decrypt_rc4($encryption_key, $binary);
+		}
+
+		# FIRST see if there was a song/title found by the search functions
+		# Needs to be longer than 1 char/byte/whatever
+		# (because i think "1" would match for length() > 0)
+		if ( length($urls->{$origurl}) > 1 and $urls->{$origurl} =~ /\w+/ ) {
+
+			$filename = $urls->{$origurl};
+			$filename =~ s/<[^>]+>//g; # strip any html; hopefully there wouldn't be any here anyway?
+
+		# Otherwise, try to find some filename in the URL
+		} elsif ( $url =~ /\/([^\/]+)$/ ) {
+			
+			my $uri_fn = $1;
+			if ( $uri_fn =~ /^\d+\.[^.]+$/ ) {
+				$filename = undef;
+			} else {
+				# URI-Escape the name, just incase
+				if ( $uri_fn !~ /\%/ ) {
+					$uri_fn = uri_escape($uri_fn);
+				}
+				$filename = $uri_fn;
+			}
+		}
+
+		if ( !defined $filename ) {
+			print STDERR "Warning: no proper filename found for \"$url\"; skipping\n";
+			return();
+		}
+
+		# Clean it up slightly
+		$filename =~ s/\%20/ /g;
+		$filename =~ s/$EXTENSION//ig;
+
+		# Flip around title -- artist
+		if ( ! $NOFLIP ) {
+			$filename =~ s/^(.+)\s+--\s+(.+)$/$2 - $1/g;
+		}
+
+		$filename .= $EXTENSION;
+
+		if ( $TEST ) {
+			print "INFO: Found \"$filename\" ($url)\n";
+		} elsif ( -e $filename ) {
+			print "INFO: Skipping existing file \"$filename\"\n";
+		} else {
+			print "INFO: Saving \"" . $url . "\" as \"$filename\"\n";
+			getstore($url, $filename);
+
+			if ( -e $filename and ! identify_mp3($filename) ) {
+				print "INFO: Deleting non-mp3 file \"$filename\"\n";
+				unlink($filename);
+			}
+		}
+	}
+
+}
+
+sub getstore {
+        my ($url, $file) = @_;
+
+        my $WGET;
+        foreach my $dir (split(/:/,$ENV{PATH})) {
+                if ( -x "$dir/wget" ) {
+                        $WGET = "$dir/wget";
+                }
+        }
+
+        if ( -e "$file" ) {
+                print STDERR "Error: file \"$file\" exists; skipping download\n";
+        }
+
+        if ( defined $WGET ) {
+                system("wget", "-t", "3", "-O", $file, $url);
+		my $r = $?;
+		my $ret = ($r >> 8);
+
+		if ( $ret == 130 or $r == 2 ) {
+			print STDERR "INFO: It looks like wget was killed by the user.\n";
+			print STDERR "Do you want to continue? ";
+			my $input = <STDIN>;
+			chomp $input;
+			if ( $input !~ /^y(es)?$/i ) {
+				print STDERR "You got it; exiting...\n";
+				exit(1);
+			}
+		} elsif ( $ret == 0 and $r == 0 ) {
+                        return(1);
+                }
+
+		if ( -s $file == 0 ) {
+			print "INFO: Looks like wget failed to download $file; cleaning up\n";
+			unlink($file);
+		}
+        } else {
+                my $ua = LWP::UserAgent->new;
+                my $res = $ua->get($url, ":content_file" => $file);
+                return($res->is_success);
+        }
+	return(0);
+}
+
+# Stolen shamelessly from Net::SSH::Perl::Crypt::RC4,
+# because i'm not going to require that huge fucking mess
+# of dependencies to decrypt a 63 byte-long string.
+# (I once had to build all the modules into packages
+# for Red Hat... about 30 modules, give or take 5)
+sub decrypt_rc4 {
+        my ($key, $text) = @_;
+
+        my $blocksize = 8;
+        my $keysize = 16;
+        my $trans = '';
+        my ($x,$y,$s);
+
+        $key = substr($key, 0, $keysize);
+        my @k = unpack 'C*', $key;
+        my @s = (0..255);
+        $y = (0);
+        for my $x (0..255) {
+                $y = ($k[$x % @k] + $s[$x] + $y) % 256;
+                @s[$x, $y] = @s[$y, $x];
+        }
+        $s = \@s;
+        $x = 0;
+        $y = 0;
+
+        for my $c (unpack 'C*', $text) {
+                $x = ($x + 1) % 256;
+                $y = ( $s->[$x] + $y ) % 256;
+                @$s[$x, $y] = @$s[$y, $x];
+                $trans .= pack('C', $c ^= $s->[( $s->[$x] + $s->[$y] ) % 256]);
+        }
+
+        return($trans);
+}
+
+# So in this function we try to guess if a file is an MP3 based on its file header.
+# If that fails we use `file`.
+# In the future we should probably optionally require an MP3 or audio file module...
+# 
+# File headers:
+# 073 068 : Blues/Muddy Waters/Chess Blues Disc 1 (1947-1952)/Muddy Waters - I Can't Be Satisfied.mp3: Audio file with ID3 version 23.0 tag, MP3 encoding
+# 082 073 : Metal/Dimmu Borgir/Dimmu Borgir/Enthrone Darkness Triumphant/A Succubus in Rapture.mp3: RIFF (little-endian) data, WAVE audio, MPEG Layer 3, stereo 44100 Hz
+# 255 227 : Comedy/George Carlin/The Little David Years 1971-1977/cd4/09 - Snot, The Original Rubber Cement.mp3: MPEG ADTS, layer III,  v2.5,  32 kBits, 11.025 kHz, JntStereo
+# 255 242 : Rock/Billy Joel/Unknown/Baby Grand.mp3: MPEG ADTS, layer III, v2,  64 kBits, 22.05 kHz, JntStereo
+# 255 243 : Comedy/Cheech And Chong/cheech and chong - answering machine message.mp3: MPEG ADTS, layer III, v2,  64 kBits, 22.05 kHz, Monaural
+# 255 250 : Metal/Behemoth/Behemoth/Unknown/ Ceremony Of Shiva.mp3: MPEG ADTS, layer III, v1, 224 kBits, 44.1 kHz, JntStereo
+# 255 251 : Blues/Muddy Waters/Unknown/Champagne & Reefer.mp3: MPEG ADTS, layer III, v1, 128 kBits, 44.1 kHz, JntStereo
+# 255 255 251 : Miscellaneous/CarlieAn/Velvet Acid Christ/Hex Angel (Utopia-Dystopia)/Pretty Toy.mp3: data
+#     ^ here is the real start of the header
+#
+sub identify_mp3 {
+	my $file = shift;
+	my $_FILE;
+	my $_TYPE;
+
+	for ( split /:/, $ENV{PATH} ) {
+		if ( -x "$_/file" ) {
+			$_FILE = "$_/file";
+			last;
+		}
+	}
+
+	# Sometimes `file` doesn't identify the MP3 properly, so we do some magic to figure it out on our own (or attempt it anyway)
+	my $buf;
+	my @digits;
+	my $dl;
+
+	open(FILE, "<$file") || die "Error: couldn't open mp3 \"$file\" to type: $!\n";
+	sysread(FILE, $buf, 1024);
+	close(FILE);
+	@digits = map { ord($_) } split //, $buf;
+
+	# Skip null buffer at front of some headers... What is this, some ID3v2 compatibility hack?
+	# Doesn't happen often but looks like whatever it is uses the LAME 3.92 engine (but doesn't everything?)
+	for ( $dl = 0; $dl < 1025; $dl++ ) {
+		if ( $digits[$dl] != 0 ) {
+			last;
+		}
+	}
+
+	if ( $digits[$dl] == 255 ) { # no beginning ID3 tag...
+		if ( $digits[$dl+1] > 225 and $digits[$dl+1] < 256 ) { # seems to be the basic mp3 range
+			$_TYPE = "MPEG ADTS,"; # ignore the specifics
+		}
+	} elsif ( $digits[$dl] == 73 and $digits[$dl+1] == 68 and $digits[$dl+2] == 51 ) { # ID3
+		$_TYPE = "Audio file with ID3";
+	} elsif ( $digits[$dl] == 82 and $digits[$dl+1] == 73 and $digits[$dl+2] == 70 ) { # RIF[F] ... included based on sample of my mp3's
+		$_TYPE = "RIFF";
+	} else { # If the above failed, try `file`
+		$_TYPE = `file "$file"`;
+		chomp($_TYPE);
+	}
+
+	if ( defined $_TYPE and ($_TYPE !~ /MPEG ADTS,/ and $_TYPE !~ /Audio file/ and $_TYPE !~ /RIFF/ and $_TYPE !~ /MP3/) ) {
+		print "INFO: File \"$file\" doesn't look like an MP3 ($_TYPE).\n";
+		return( $NOVERIFY );
+	}
+
+	return(1);
+}
+

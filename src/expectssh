@@ -1,0 +1,60 @@
+#!/bin/sh
+# expectssh - log into boxes automatically using only a password and run a command
+# Copyright (C) 2010 Peter Willis <peterwwillis@yahoo.com>
+
+function dohost() {
+    local HOST="$1"
+    shift 1
+    # Escape any metacharacters in the "command" so expect doesn't try to interpolate it
+    local FOO=$(echo "$CMD" | sed -e "s/\([\`\"\$\]\)/\\\\\1/g")
+
+    expect -c "
+        set prompt \"(%|#|\\\$) $\"      ;# default prompt
+        set timeout 10
+        match_max 100000
+        spawn ssh -o NumberOfPasswordPrompts=1 -o PasswordAuthentication=yes $USER@$HOST \"$FOO\"
+        expect {
+            stty -echo
+            \"*yes/no*\" { send \"yes\r\"; exp_continue }
+            \"*assword:\" { send \"$PASS\r\"; exp_continue }
+            stty echo  
+        }
+        exit
+    "
+}
+
+USER=`id -nu`
+
+C=0
+while [ $# -gt 0 ] ; do
+    case "$1" in
+        "-u")
+            USER="$2"; shift 2;;
+        *)
+            if [ ! -n "$CMD" ] ; then
+                CMD="$1"; shift 1;
+            else
+                HOSTS[$C]="$1"; C=$(($C+1)); shift 1;
+            fi ;;
+    esac
+done
+
+if [ $C -lt 1 -o "$1" = "-h" -o "$1" = "--help" ] ; then
+    echo "Usage: $0 [OPTIONS] COMMAND HOST [HOST ..]"
+    echo "Logs into HOST and runs COMMAND."
+    echo "Prompts first for a password to give to HOST."
+    echo ""
+    echo "Options:"
+    echo "  -u USER             Optional USER to pass to ssh."
+    exit 1
+fi
+
+PASS=""
+echo -en "Gime dat pass: "
+stty -echo 2>/dev/null
+read PASS
+stty echo 2>/dev/null
+
+for i in `seq 0 $(($C-1))` ; do
+    dohost ${HOSTS[$i]}
+done

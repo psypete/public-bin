@@ -1,0 +1,140 @@
+#!/bin/sh
+# slackpack - handle slackconfig and slackmake gracefully
+# Copyright (C) 2005-2007  Peter Willis <peterwwillis@yahoo.com>
+
+# temp file construction cruft...
+
+TEMPDIR=''
+if [ -n "$TMP" ] ; then
+    TEMPDIR="$TMP"
+elif [ -n "$TMPDIR" ] ; then
+    TEMPDIR="$TMPDIR"
+else
+    TEMPDIR="/tmp"
+fi
+
+TEMPFILE="$TEMPDIR/slackpack"
+
+if [ -n "$LOGNAME" ] ; then
+    TEMPFILE="$TEMPFILE-$LOGNAME"
+elif [ -n "$USER" ] ; then
+    TEMPFILE="$TEMPFILE-$USER"
+elif [ -n "$USERNAME" ] ; then
+    TEMPFILE="$TEMPFILE-$USERNAME"
+else
+    TEMPFILE="$TEMPFILE-$$"
+fi
+
+if [ -n "$RANDOM" ] ; then
+    TEMPFILE="$TEMPFILE-$RANDOM"
+else
+    TEMPFILE="$TEMPFILE-`date +%s`" # %N is better but not supported everywhere (read: busybox)
+fi
+
+function get_ext() {
+    local name="$1"
+    if [ ! x`echo $name | grep -e "\.\(tar\.gz\|tgz\)$"` = "x" ] ; then
+        echo "tgz"
+    elif [ ! x`echo $name | grep -e "\.\(tar\.bz2\|tbz2\)$"` = "x" ] ; then
+        echo "tbz2"
+    elif [ ! x`echo $name | grep -e "\.zip$"` = "x" ] ; then
+        echo "zip"
+    elif [ ! x`echo $name | grep -e "\.\(tar\.xz\|tar\.lz\|tar\.7z\|tar\.lzma\|txz\|tlz\)$"` = "x" ] ; then
+        echo "txz"
+    fi
+}
+
+function devise_build_number() {
+        BPREFIX="$1"
+        BPOSTFIX="$2"
+        BUILDNUM=1
+        while [ true ] ; do
+                if [ -e "$BASE-$BUILDNUM$BPOSTFIX" ] ; then
+                        BUILDNUM=$((BUILDNUM+1))
+                else
+                        echo "$BPREFIX$BUILDNUM$BPOSTFIX"
+                        break
+                fi
+        done
+}
+
+if [ $# -lt 1 ] ; then
+    cat << EOF
+Usage: `basename $0` ARCHIVE [..]
+Where ARCHIVE is an optionally compressed zip or tar file.
+
+  `basename $0` unpacks the archive, changes into the newly-created directory and
+  runs slackconfig && slackmake && slack_pkg. If these commands work it then
+  moves the newly-created package to the parent directory, changes back to
+  the parent and removes the build directory.
+
+EOF
+fi
+
+for pkg in $@ ; do
+    if [ ! -e "$pkg" ] ; then
+        SCOPTS="$SCOPTS $pkg"
+    fi
+done
+
+for pkg in "$@" ; do
+
+    [ -e "$pkg" ] || continue
+    CMP=''
+    ZTOOL=''
+    CTOOL=''
+    BNAME=`basename "$pkg"`
+    DIR=''
+
+    if [ "`get_ext "$BNAME"`" = "zip" ] ; then
+        CTOOL='unzip'
+        CMP='-v'
+    elif [ "`get_ext "$BNAME"`" = "tgz" ] ; then
+        ZTOOL='gzip -c -d'
+        CTOOL='tar'
+        CMP="-xvf -"
+    elif [ "`get_ext "$BNAME"`" = "tbz2" ] ; then
+        ZTOOL='bzip2 -c -d'
+        CTOOL='tar'
+        CMP="-xvf -"
+    elif [ "`get_ext "$BNAME"`" = "txz" ] ; then
+        ZTOOL='unlzma -c -d'
+        CTOOL='tar'
+        CMP="-xvf -"
+    fi
+
+    if [ -n "$ZTOOL" ] ; then
+        $ZTOOL "$pkg" | $CTOOL $CMP > $TEMPFILE
+    else
+        $CTOOL $CMP "$pkg" > $TEMPFILE
+    fi
+
+    DIR="`head -n 1 $TEMPFILE`"
+    DIR=`dirname "$DIR"`
+    # fix DIR...
+    if [ "$DIR" = "." ] ; then
+        DIR="`head -n 1 $TEMPFILE`"
+        DIR=`basename "$DIR"`
+    fi
+    rm -f "$TEMPFILE"
+
+    if [ ! -n "$DIR" -o "$DIR" = "/" ] ; then
+        echo "Error: invalid directory or no directory found in archive."
+        exit 1
+    fi
+
+    cd "$DIR" &&
+    slackconfig $SCOPTS &&
+    slackmake &&
+    cd ..
+
+    if [ $? -eq 0 ] ; then
+        echo "Seems like building was successful."
+        echo "Moving built package(s) to current directory..."
+        mv "$DIR"/*sbt.tgz .
+        echo "Removing build directory..."
+        rm -rf "$DIR"
+    fi
+
+done
+

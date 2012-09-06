@@ -1,0 +1,176 @@
+#!/usr/bin/perl
+# randomly select random qdb quotes
+# Copyright (C) 2010 Peter Willis <peterwwillis@yahoo.com>
+#
+
+use strict;
+use URI;
+use LWP::UserAgent;
+use HTML::TokeParser;
+
+my $VERBOSE = $ENV{VERBOSE} || 0;
+my $TIMEOUT = 10;
+my $FAKE_MOBILE = 0;
+my $FAKE_BROWSER = 1;
+
+if ( $VERBOSE ) {
+    use Data::Dumper;
+}
+
+sub new {
+    my $self = {};
+    return $self;
+}
+
+sub get_http {
+    my $url = shift;
+    my ($headers, $ua);
+
+    if ( $FAKE_MOBILE ) {
+        $headers = HTTP::Headers->new(
+            "Accept" => "*/*, text/html, application/vnd.wap.xhtml+xml, application/xhtml+xml, text/vnd.wap.wml;q=0.5, application/vnd.oma.drm.message",
+            "Accept-Language" => "en-us",
+            "UA-OS" => "Windows CE (Smartphone) - Version 5.2",
+            "UA-color" => "color16",
+            "x-wap-profile" => "\"http://wap.samsungmobile.com/uaprof/SGH-i637.xml\"",
+            "UA-Voice" => "TRUE",
+            "UA-pixels" => "320x240",
+            "UA-CPU" => "ARM",
+            #"Accept-Encoding" => "gzip,deflate"
+            #"Accept-Encoding" => "none"
+            "Accept-Encoding" => "text/html"
+        );
+
+        $ua = LWP::UserAgent->new( env_proxy => 1,
+            agent => "SAMSUNG-SGH-I637/UCID4 Profile/MIDP-2.1 Configuration/CLDC-1.1 Mozilla/4.0 (compatible; MSIE 6.0; Windows CE; IEMobile 7.11)",
+            default_headers => $headers
+        );
+
+    } elsif ( $FAKE_BROWSER ) {
+        $headers = HTTP::Headers->new(
+            "Accept" => "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            "Accept-Language" => "-us,en;q=0.5",
+            #"Accept-Encoding" => "gzip,deflate",
+            "Accept-Charset" => "ISO-8859-1,utf-8;q=0.7,*;q=0.7",
+            "Connection" => "close"
+        );
+        $ua = LWP::UserAgent->new( env_proxy => 1,
+            agent => "Mozilla/5.0 (X11; U; Linux i686; en-US; rv:1.9.2.3) Gecko/20100401 Firefox/3.6.3",
+            default_headers => $headers
+        );
+
+    } else {
+        $headers = HTTP::Headers->new(
+            #"Accept" => "*/*, text/html, application/xhtml+xml"
+            "Accept" => "text/html"
+        );
+        $ua = LWP::UserAgent->new( env_proxy => 1, default_headers => $headers );
+    }
+
+    $ua->timeout($TIMEOUT);
+
+    return $ua->get($url);
+}
+
+sub debug {
+    print "debug: $_[0]\n" if $VERBOSE;
+}
+
+sub scrape_bashdotorg {
+    my $self = shift;
+    my $arg = shift;
+    my $URL = "http://bash.org/?random";
+    my @text;
+    
+    #my $uri = new URI;
+    #$uri->query_form("q", "weather $arg");
+    my $req = $URL;# . $uri;
+    debug("req: $req");
+
+    my $response = get_http($req);
+    my $content = $response->content;
+    debug("content: $content");
+    my $p = HTML::TokeParser->new( \$content );
+
+    $p->{textify} = undef;
+    while ( my $token = $p->get_tag("table") ) {
+        $p->{textify} = undef;
+
+        while ( my @stuff = $p->get_tag("p") ) {
+            last if ( !defined $stuff[0] );
+
+            foreach my $aref ( @stuff ) {
+                if ( exists $aref->[1]->{'class'} and $aref->[1]->{'class'} eq "qt" ) {
+                    my $text = $p->get_text("/p");
+
+                    if ( defined $text and length($text) ) {
+                        chomp $text;
+                        push(@text, $text);
+                    }
+                }
+            }
+        }
+    }
+
+    return \@text;
+}
+
+sub scrape_qdbdotus {
+    my $self = shift;
+    my $arg = shift;
+    my $URL = "http://qdb.us/random";
+    my @text;
+
+    #my $uri = new URI;
+    #$uri->query_form("q", "weather $arg");
+    my $req = $URL;# . $uri;
+    debug("req: $req");
+
+    my $response = get_http($req);
+    my $content = $response->content;
+    debug("content: $content");
+    my $p = HTML::TokeParser->new( \$content );
+
+    $p->{textify} = undef;
+    while ( my $token = $p->get_tag("table") ) {
+        $p->{textify} = undef;
+
+        while ( my @stuff = $p->get_tag("span") ) {
+            last if ( !defined $stuff[0] );
+
+            foreach my $aref ( @stuff ) {
+                if ( exists $aref->[1]->{'class'} and $aref->[1]->{'class'} eq "qt" ) {
+                    my $text = $p->get_text("/span");
+
+                    if ( defined $text and length($text) ) {
+                        chomp $text;
+                        push(@text, $text);
+                    }
+                }
+            }
+        }
+    }
+
+    return \@text;
+}
+
+
+sub main {
+
+    my $o = new;
+    my $rnd = int rand(2);
+    my $quotes;
+
+    if ( $rnd == 0 ) {
+        $quotes = scrape_qdbdotus();
+    } elsif ( $rnd == 1 ) {
+        $quotes = scrape_bashdotorg();
+    }
+
+    my $quote = $quotes->[ int(rand(@$quotes)) ];
+    print "$quote\n";
+}
+
+main();
+
+

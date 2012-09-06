@@ -1,0 +1,22 @@
+#!/bin/sh
+echo 1 > /sys/module/snd_ac97_codec/parameters/power_save
+echo 1 > /sys/module/snd_hda_intel/parameters/power_save
+
+echo 0 > /proc/sys/kernel/nmi_watchdog
+
+echo 1 > /sys/devices/system/cpu/sched_mc_power_savings
+echo 1 > /sys/devices/system/cpu/sched_smt_power_savings
+echo ondemand > /sys/devices/system/cpu/cpu0/cpufreq/scaling_governor
+
+echo 1500 > /proc/sys/vm/dirty_writeback_centisecs
+
+hciconfig hci0 down ; rmmod hci_usb
+
+echo min_power > /sys/class/scsi_host/host0/link_power_management_policy
+
+ethtool -s eth0 wol d 
+iwconfig wlan0 power timeout 500ms
+
+for i in /sys/bus/usb/devices/*/*/power/autosuspend ; do echo 1 > $i ; done
+
+

@@ -1,0 +1,116 @@
+#!/usr/bin/perl
+# logexec - executes apps when a log entry matches a regular expression
+# Copyright (C) 2009 Peter Willis <peterwwillis@yahoo.com>
+
+use strict;
+use IO::Select;
+
+require "iniconfig.pl";
+
+my $CANREAD_TIMEOUT = 1;
+my %EXECS;
+my $CONFIGDIR = "logexec.d";
+
+main();
+
+sub main {
+    my (@dirs, @logfds);
+    my %fds = ( 'tail' => {} );
+
+    opendir(D,$CONFIGDIR)||die"Error: $!";
+    #@dirs = grep(!/^\.\.?$/,readdir(D));
+    @dirs = grep(/^.+\.conf$/, readdir(D));
+    closedir(D);
+
+    # Here we go through each config file and dump it into sections, then index
+    # the sections independently but refer back to the file for logging or other
+    # purposes.
+    foreach my $f (@dirs) {
+        next unless -f "$CONFIGDIR/$f";
+        $EXECS{$f} = parse_ini("$CONFIGDIR/$f");
+        next unless defined $EXECS{$f};
+
+        while ( my ($section, $values) = each %{ $EXECS{$f} } ) {
+            $values->{'_parent'} = $EXECS{$f}; # 'linked list' back to parent
+            $values->{'_name'} = $section;
+
+            # If the config wants to tail it, open it up for tailing
+            if ( exists $values->{'tail'} ) {
+                open( $values->{'_fh'}, "<$values->{tail}" ) || die "Error: couldn't open log $values->{tail}: $!";
+                seek($values->{'_fh'}, 0, 2);
+
+                # Here we 'copy' this file handle into a hash for the tail'ed
+                # files that points back at the object that referenced it.
+                $fds{'tail'}->{ $values->{'_fh'} } = $values;
+                push @logfds, $values->{'_fh'} ;
+            }
+        }
+    }
+
+    my $s = IO::Select->new();
+    $s->add(@logfds);
+
+    while ( @logfds ) {
+        print STDERR "Checking for reads\n" if $ENV{VERBOSE};
+
+        my @ready = $s->can_read($CANREAD_TIMEOUT);
+
+        foreach my $fd (@ready) {
+            print STDERR "INFO: can read on $fd\n" if $ENV{VERBOSE};
+
+            # file handle is for tailing? cool, let's run it through the ringer
+            if ( exists $fds{'tail'}->{$fd} ) {
+                print STDERR "INFO: tailing $fds{tail}->{$fd}->{tail}\n" if $ENV{VERBOSE};
+                my @delete = taillog($fds{tail}->{$fd}, $fd);
+                # delete any file descriptor(s) returned
+                map {
+                    delete $fds{'tail'}->{ $_ };
+                    # Delete fh from @logfds
+                    for ( my $i=0; $i<@logfds; $i++ ) {
+                        if ( $logfds[$i] eq $_ ) {
+                            splice(@logfds, $i, 1);
+                            last;
+                        }
+                    }
+                } @delete;
+            }
+        }
+
+        sleep(1);
+    }
+}
+
+sub taillog {
+    my $obj = shift;
+    my $fh = shift;
+    if ( my $buf = <$fh> ) {
+        chomp;
+        if ( exists $obj->{'regex'} and $buf =~ /$obj->{regex}/i ) {
+            execit($obj, $buf);
+        } else {
+            use Data::Dumper; print Dumper($obj);
+            print STDERR "INFO: did not match \"$buf\" with \"$obj->{regex}\"\n" if $ENV{VERBOSE};
+        }
+    # if the <$fh> didn't return true it was probably an EOF. iirc...
+    #} else { 
+    #    use Data::Dumper; print Dumper($obj);
+    #    print STDERR "fh \"$fh\"\n";
+    #    close($fh);
+    #    delete $obj->{'_fh'};
+    #    return $fh;
+    }
+}
+
+sub execit {
+    my $obj = shift;
+    my $line = shift;
+
+    if ( exists $obj->{'exec'} ) {
+        my $buf = $obj->{'exec'};
+        system($buf);
+        if ( ($? >> 8) != 0 ) {
+            print STDERR "$0: Warning: exec \"$obj->{_name}\" returned non-zero status\n";
+        }
+    }
+}
+

@@ -1,0 +1,146 @@
+#!/bin/sh
+# slackmake - handle the make process of a slackware package gracefully
+# Copyright (C) 2004-2009  Peter Willis <peterwwillis@yahoo.com>
+# 
+# Please note that if 'su' fails - for example due to bad password -
+# you can change to the package-source-dir and run slackmake again
+# and if the source already compiled it should just run the 'install'
+# and package creation portions.
+
+if [ ! -n "$ARCH" ] ; then
+    if [ `uname -m` = "x86_64" ] ; then
+        ARCH="x86-64"
+        PKGARCH="x86_64"
+        MYCPU="generic"
+    else
+        ARCH="i486"
+        PKGARCH="i486"
+        MYCPU="i686"
+    fi
+fi
+
+
+# Added for python setup.py
+[ -n "${CFLAGS}" ] || CFLAGS="-march=$ARCH -mcpu=$MYCPU -O2"
+[ -n "${CXXFLAGS}" ] || CXXFLAGS="${CFLAGS}"
+
+[ -n "${PREFIX}" ] || PREFIX="/usr"
+[ -n "${SYSCONFDIR}" ] || SYSCONFDIR="/etc"
+[ -n "${LOCALSTATEDIR}" ] || LOCALSTATEDIR="/var"
+[ ! -n "${LIBDIR}" -a "$ARCH" = "x86-64" ] && LIBDIR="$PREFIX/lib64"
+[ ! -n "${LIBDIR}" -a ! "$ARCH" = "x86-64" ] && LIBDIR="$PREFIX/lib"
+[ -n "${LIBDIR}" ] || LIBDIR="$PREFIX/lib"
+
+[ -n "${GCONF_DISABLE_MAKEFILE_SCHEMA_INSTALL}" ] || GCONF_DISABLE_MAKEFILE_SCHEMA_INSTALL=1
+
+
+INSTALL=0
+
+function parse_args() {
+    for arg in $@ ; do
+        if [ "$arg" = "--install" ] ; then
+            INSTALL=1
+        fi
+    done
+}
+
+function do_make() {
+    LDFLAGS="-L${LIBDIR}" make
+    if [ $? -eq 0 ] ; then
+        echo "make WORKED."
+        if grep DESTDIR * 2>/dev/null 1>/dev/null ; then
+            echo "RUNNING PRELIMINARY MAKE INSTALL ..."
+            make DESTDIR="`pwd`/_install" install && makeret=$?
+            if [ ! "x$makeret" = "x0" ] ; then
+                echo "MAKE INSTALL FAILED! IT PROBABLY DOESN'T RESPECT DESTDIR."
+                echo "RUNNING MAKE INSTALL AS ROOT MAY BE DANGEROUS!"
+                return 1
+            fi
+            # If we don't remove the test install we'll get directories
+            # with wrong ownership (non-root, etc)
+            /bin/rm -rf "`pwd`/_install"
+            echo "TEST OF MAKE INSTALL SUCCEEDED!"
+            echo "NOW ENTER YOUR ROOT PASSWORD TO BUILD THE PACKAGE."
+            # Here we use 'su' to change to root to run the real
+            # 'make install' and 'slack_pkg' which does the makepkg
+            su -c "export PATH=$PATH:\$PATH ; 
+                CWD=\`pwd\` ;
+                BN=\`basename \"\$CWD\"\` ;
+                mkdir -p _install$PREFIX/doc/\"\$BN\" ;
+                LDFLAGS=\"-L${LIBDIR}\" make DESTDIR=\"\$CWD/_install\" install ; makeret=$? ;
+                cp -a AUTHORS* COPYING* ChangeLog* CHANGELOG* INSTALL* NEWS* README* ReadMe* TODO* CONTACT* DEVELOPERS* GPL* LGPL* IDEAS* INDEX* KNOWN* *-FAQ RELEASE* UPGRADE* MAINTAINERS* PORTING* ANNOUNCE* VERSION* CREDITS* LICENSE* THANKS* *.html contrib docdocs _install$PREFIX/doc/\"\$BN\" 2>/dev/null ;
+                rmdir _install$PREFIX/doc/\"\$BN\" 2>/dev/null ;
+                if [ \$makeret -eq 0 ] ; then
+                    slack_pkg
+                else
+                    echo \"make install DIDN'T WORK.\"
+                    exit 1
+                fi
+            "
+        else
+            echo "grep DIDN'T FIND DESTDIR IN THIS DIRECTORY."
+            return 1
+        fi
+    else
+        echo "make DIDN'T WORK."
+        return 1
+    fi
+}
+
+function do_ruby {
+    echo "Handle 'ruby install.rb --destdir=foo'"
+}
+
+function do_python {
+    python setup.py build
+    if [ $? -eq 0 ] ; then
+        echo "build WORKED."
+        echo "RUNNING PRELIMINARY INSTALL ..."
+        python setup.py install --root="`pwd`/_install"
+        if [ $? -ne 0 ] ; then
+            echo "MAKE INSTALL FAILED! IT PROBABLY DOESN'T RESPECT DESTDIR."
+            echo "RUNNING MAKE INSTALL AS ROOT MAY BE DANGEROUS!"
+            return 1
+        fi
+        # If we don't remove the test install we'll get directories
+        # with wrong ownership (non-root, etc)
+        /bin/rm -rf "`pwd`/_install"
+        echo "TEST OF INSTALL SUCCEEDED!"
+        echo "NOW ENTER YOUR ROOT PASSWORD TO BUILD THE PACKAGE."
+        su -c "export PATH=$PATH:\$PATH ;
+            CWD=\`pwd\` ;
+            BN=\`basename \"\$CWD\"\` ;
+            mkdir -p _install$PREFIX/doc/\"\$BN\" ;
+            python setup.py install --root=\"\$CWD/_install\" ; makeret=$? ;
+            cp -a AUTHORS* COPYING* ChangeLog* CHANGELOG* INSTALL* NEWS* README* ReadMe* TODO* CONTACT* DEVELOPERS* GPL* LGPL* IDEAS* INDEX* KNOWN* *-FAQ RELEASE* UPGRADE* MAINTAINERS* PORTING* ANNOUNCE* VERSION* CREDITS* LICENSE* THANKS* *.html contrib docdocs _install$PREFIX/doc/\"\$BN\" 2>/dev/null ;
+            rmdir _install$PREFIX/doc/\"\$BN\" 2>/dev/null ;
+            if [ \$makeret -eq 0 ] ; then
+                slack_pkg
+            else
+                echo \"install DIDN'T WORK.\"
+                exit 1
+            fi
+        "
+    else
+        echo "build DIDN'T WORK."
+        return 1
+    fi
+}
+
+parse_args $@
+
+export CFLAGS
+export CXXFLAGS
+
+if [ -f "Makefile" -o -f "makefile" ] ; then
+    do_make
+elif [ -f "install.rb" ] ; then
+    do_ruby
+elif [ -f "setup.py" ] ; then
+    do_python
+else
+    echo "Failure: nothing to make"
+    exit 1
+fi
+
+exit $?

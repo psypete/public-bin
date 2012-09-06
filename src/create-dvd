@@ -1,0 +1,419 @@
+#!/usr/bin/perl
+# create-dvd v0.1 - create a video dvd from a media file
+# Copyright (C) 2007  Peter Willis <peterwwillis@yahoo.com>
+# 
+# This script will take any media MPlayer can parse and will
+# shape it into a standard DVD vob file, create the structure
+# of the dvd with dvdauthor and optionally burn it to a DVD.
+# It should only require mencoder and dvdauthor, and optionally
+# dvd+rw-tools to burn the DVD.
+# By default it will create an NTSC 16:9 movie with 1 chapter.
+# 
+# Thanks to Manolis Tzanidakis for the great linux.com article:
+#   http://www.linux.com/articles/53702
+#  
+# Also thanks to the crew of hackers who created MPlayer,
+# an excellent video player and an incredibly complicated,
+# difficult to use and poorly documented video encoder.
+# 
+# And thanks to those who created dvdauthor, a simple yet
+# effective method of creating a DVD.
+
+use strict;
+$|=1;
+
+#
+# Defaults
+#
+
+my ($SRCVID, $DVDNAME, $SUB);
+my $ASPECT = "";
+my $TVFORMAT = "ntsc";
+my $FORMAT = "dvd";
+my $VOLUME = "";
+my $BURN = 0;
+my $TEST = 0;
+my $DVDDEVICE = "/dev/dvd";
+my $VERBOSE = exists $ENV{VERBOSE} ? $ENV{VERBOSE} : 0;
+my $CHAPTERS = 0;
+my %IDENTIFY;
+
+# 
+# Main
+#
+
+parse_opts();
+
+if ( @ARGV < 2 ) {
+	usage();
+}
+
+( $SRCVID, $DVDNAME ) = ( shift @ARGV, shift @ARGV );
+
+my $tmp = get_tmpfile();
+
+print "Identifying srcvid ...\n";
+identify_srcvid($SRCVID);
+
+if ( encode_video($SRCVID, $tmp) ) {
+
+	print "Encode succeeded\n";
+
+	my $ret = create_dvd($tmp);
+
+	if ( $ret && $TEST ) {
+		test_dvd($DVDNAME);
+	}
+
+	if ( $ret && $BURN ) {
+		print "Are you sure you want to burn the DVD? [y/n] ";
+		my $input = <STDIN>;
+		chomp $input;
+		if ( lc $input eq "y" or lc $input eq "yes" ) {
+			burn_dvd($DVDDEVICE, $DVDNAME);
+		}
+	}
+
+} else {
+
+	print "Error: encode failed\nRun me again with verbose mode for more details\n";
+
+}
+
+exit(0);
+
+
+
+# 
+# Functions
+# 
+
+sub parse_opts {
+	my @_ARGV;
+	for ( my $i=0; $i< @ARGV; $i++ ) {
+		if ( $ARGV[$i] eq "-aspect" and exists $ARGV[$i+1] ) {
+			if ( $ARGV[$i+1] !~ /^(\d+\/\d+|\d+\.\d+|\d+:\d+)$/ ) {
+				die "Error: invalid aspect ratio";
+			}
+			$ASPECT = $ARGV[++$i];
+			if ( $ASPECT =~ /^(2\.35|235:100|235\/100|221\/100)$/ ) {
+				$ASPECT = 2.350000;
+			} elsif ( $ASPECT =~ /^(1\.7|16:9|16\/9)$/ ) {
+				$ASPECT = 1.777777;
+			} elsif ( $ASPECT =~ /^(1\.3|4:3|4\/3)$/ ) {
+				$ASPECT = 1.333333;
+			} else {
+				die "Error: invalid aspect ratio";
+			}
+		} elsif ( $ARGV[$i] =~ /^-(ntsc|pal)$/ ) {
+			$TVFORMAT = $1;
+		} elsif ( $ARGV[$i] =~ /^-(dvd|vcd|svcd)$/ ) {
+			$FORMAT = $1;
+		} elsif ( $ARGV[$i] eq "-test" ) {
+			$TEST = 1;
+		} elsif ( $ARGV[$i] eq "-dvd-device" and exists $ARGV[$i+1] ) {
+			$DVDDEVICE = $ARGV[++$i];
+		} elsif ( $ARGV[$i] eq "-vol" and exists $ARGV[$i+1] ) {
+			$VOLUME = ":volume=" . $ARGV[++$i];
+		} elsif ( $ARGV[$i] eq "-sub" and exists $ARGV[$i+1] ) {
+			$SUB = $ARGV[++$i];
+		} elsif ( $ARGV[$i] eq "-v" ) {
+			$VERBOSE = 1;
+		} elsif ( $ARGV[$i] eq "-chapters" and exists $ARGV[$i+1] ) {
+			if ( $ARGV[$i+1] !~ /^\d+$/ ) {
+				die "Error: -chapters requires a digit argument.";
+			}
+			$CHAPTERS = $ARGV[++$i];
+		} else {
+			push @_ARGV, $ARGV[$i];
+		}
+	}
+
+	print STDERR "INFO: ASPECT=$ASPECT\nTVFORMAT=$TVFORMAT\nFORMAT=$FORMAT\nTEST=$TEST\nDVDDEVICE=$DVDDEVICE\nVERBOSE=$VERBOSE\nCHAPTERS=$CHAPTERS\n_ARGV: @_ARGV\n" if ($VERBOSE);
+
+	@ARGV = @_ARGV;
+}
+
+sub get_tmpfile {
+	my $tmpname = "$DVDNAME.tmp";
+	if ( -e $tmpname ) {
+		unlink($tmpname) || die "Error: temporary file \"$tmpname\" could not be deleted: $!\n";
+	}
+	return($tmpname);
+}
+
+sub encode_video {
+	my ($oldvid, $newvid) = @_;
+	my ($ofps, $keyint, $scale, $format, $lavcopts, $srate, $acodec, $vcodec, $abitrate, $vbitrate, $vrc_buf, $vrc_min, $vrc_max);
+	my @cmdline = ( "mencoder" );
+
+	print "Now encoding the $FORMAT video, please be patient ...\n";
+	
+	if ( $VERBOSE ) {
+		push( @cmdline, "-v" );
+	} else {
+		push( @cmdline, "-really-quiet" );
+	}
+
+	if ( $TVFORMAT eq "ntsc" ) {
+		$ofps = "30000/1001";
+		$keyint = "18";
+	} elsif ( $TVFORMAT eq "pal" ) {
+		$ofps = "25";
+		$keyint = "15";
+	}
+
+	if ( $FORMAT eq "dvd" ) {
+		if ( $TVFORMAT eq "ntsc" ) {
+			$scale = "720:480";
+		} elsif ( $TVFORMAT eq "pal" ) {
+			$scale = "720:576";
+		}
+		$srate = "48000";
+		$acodec = "ac3";
+		$abitrate = "192";
+		$vcodec = "mpeg2video";
+		$vbitrate="5000";
+		$format = "dvd";
+		$vrc_buf = "1835";
+		$vrc_min = "";
+		$vrc_max = ":vrc_maxrate=9800";
+	} elsif ( $FORMAT eq "vcd" ) {
+		if ( $TVFORMAT eq "ntsc" ) {
+			$scale = "352:240";
+		} elsif ( $TVFORMAT eq "pal" ) {
+			$scale = "352:288";
+		}
+		$srate = "44100";
+		$acodec = "mp2";
+		$abitrate = "224";
+		$vcodec = "mpeg1video";
+		$vbitrate = "1152";
+		$format = "xvcd";
+		$vrc_buf = "327";
+		$vrc_min = ":vrc_minrate=1152";
+		$vrc_max = ":vrc_maxrate=1152";
+	} elsif ( $FORMAT eq "svcd" ) {
+                if ( $TVFORMAT eq "ntsc" ) {
+                        $scale = "480:480";
+                } elsif ( $TVFORMAT eq "pal" ) {
+                        $scale = "480:576";
+                }
+                $srate = "44100";
+                $acodec = "mp2";
+                $abitrate = "224";
+                $vcodec = "mpeg2video";
+                $vbitrate = "2500";
+                $format = "xsvcd";
+                $vrc_buf = "917";
+                $vrc_min = ":vrc_minrate=600";
+                $vrc_max = ":vrc_maxrate=2500:mbd=2"; # add macroblock=2 for svcd
+	}
+
+	# Auto-detect aspect ratio... Sort of. :)
+	if ( !defined $ASPECT or $ASPECT eq "" ) {
+		if ( exists $IDENTIFY{ID_VIDEO_WIDTH} and exists $IDENTIFY{ID_VIDEO_HEIGHT} ) {
+			my $aspect_float = ( $IDENTIFY{ID_VIDEO_WIDTH} / $IDENTIFY{ID_VIDEO_HEIGHT} );
+			
+			# So here's the deal:
+			#   1. DVDs only allow two aspect ratios: 4/3 and 16/9
+			#   2. Some movies (PanaVision/CineScope) were filmed
+			#     with a 235/100 or similar aspect ratio.
+			#   3. The only way to get those videos to show up
+			#     properly on all TVs without cutting the edges is
+			#     to scale the video to be less tall and pad the
+			#     top and bottom with black bars. (Letterboxing)
+			# 
+			# So, here we get an estimate of the aspect ratio and
+			# set the new aspect and scaling options from there.
+			
+			if ( $TVFORMAT eq "ntsc" ) {
+				# This should be determined by the SRCVID's aspect ratio
+				# but I am too lazy/stupid to figure out the math
+				# involved. This seems to work for most 235/100 movies.
+			} elsif ( $TVFORMAT eq "pal" ) {
+				# This is a total guess. SOMEONE FIXME!
+			}
+
+			# If the aspect is bigger than 16/9, calculate top/bottom padding
+			# based on the detected aspect ratio (so this should fit whatever
+			# movie aspect ratio we find >= 16/9 )
+			if ( $aspect_float > 1.78 ) {
+				$ASPECT = "16/9";
+				my $oldscale = $scale;
+				my ($w, $h) = split(/:/,$scale);
+
+				# So here's the big secret to calculating the pad for a resize:
+				#   1. Take the new width (always 720 for our DVDs) and divide by the detected aspect ratio to get the new height.
+				#   2. Subtract this new number from the former new-height (480 NTSC, 576 PAL)
+				#   3. Divide by two to get half the pad size
+
+				# Though apparrently we need to use the "expanded width" when calculating:
+				#   http://www.mplayerhq.hu/DOCS/HTML/en/menc-feat-vcd-dvd.html
+				# Seems like $dvd_height * $dvd_aspect_ratio
+				my $full_w;
+				$full_w = $h * eval $ASPECT;
+
+				# Round up if odd
+				if ( ($full_w % 2) == 1 ) {
+					$full_w++;
+				}
+
+				# NOTE
+				# * all these calculations are flawed because we are doing them decimal and rounding each time.
+				# * we really should be finding the closest number that divides by 4, 8, 16, something like that.
+				# * i'm just going to cheat and make my floating-point precision be .2
+				# NOTE
+
+				my $new_h = int ( $full_w / sprintf("%.2f",$aspect_float) );
+				# Round the new height up by one pixel if it's not divisible by two... hey this might help?
+				if ( ($new_h % 2) == 1 ) {
+					$new_h++;
+				}
+				my $pad = $h - $new_h;
+				# Round the pad up by one pixel... Might make halfpad make a bit more sense
+				if ( ($pad % 2) == 1 ) {
+					$pad++;
+				}
+				my $halfpad = $pad / 2; # See??
+
+				# My disclaimer for the above horrible math + code:
+				# Not only do i suck at math but i'm really lazy and this will probably work most of the time.
+				# Don't like it? Fix it and send me a patch. =)
+
+				print STDERR "INFO: original aspect " . sprintf("%.2f",$aspect_float) . " -> $ASPECT: expanding $w:$new_h -> $w:$h\n";
+				$scale="$w:$new_h,expand=$oldscale:$halfpad:$halfpad:1"; # ":1" = might as well turn on OSD ...
+
+			# We should probably calculate the proper horizontal expanding,
+			#  but I don't think any movies are taller than they are wide..
+			} elsif ( $aspect_float >= 1.5 ) {
+				$ASPECT = "16/9";
+			} else {
+				$ASPECT = "4/3";
+			}
+			
+		} else {
+			# Default is 16/9 if we didn't even get the film's
+			# width/height
+			$ASPECT = "16/9";
+		}
+	}
+
+	$lavcopts = "vcodec=$vcodec:vrc_buf_size=$vrc_buf$vrc_min$vrc_max:vbitrate=$vbitrate:keyint=$keyint:aspect=$ASPECT:acodec=$acodec:abitrate=$abitrate";
+
+	push( @cmdline, "-oac", "lavc", "-ovc", "lavc", "-of", "mpeg", "-mpegopts", "format=$format:tsaf", "-vf", "scale=$scale,harddup", "-srate", $srate, "-af", "lavcresample=$srate$VOLUME", "-lavcopts", $lavcopts, "-ofps", $ofps );
+
+	if ( defined $SUB ) {
+		push( @cmdline, "-sub", $SUB );
+	}
+
+	print join(" ",@cmdline)."\n" if ($VERBOSE);
+	push( @cmdline, "-o", $newvid, $oldvid );
+
+	system( @cmdline );
+
+	if ( ($? >> 8) == 0 ) {
+		return(1);
+	}
+
+	return(0);
+
+}
+
+sub create_dvd {
+	my $vid = shift;
+	my $tmpxml = "$DVDNAME.xml";
+
+	print "Now creating the DVD directory structure ...\n";
+
+	if ( -e $tmpxml ) {
+		unlink($tmpxml) || die "Error: could not remove temp xml file \"$tmpxml\": $!\n";
+	}
+
+	open(FILE, ">$tmpxml") || die "Error: couldn't open tmp xml file \"$tmpxml\" for writing: $!\n";
+
+	# If the user wanted to add chapters, space them out based on the length
+	# of the film gotten by 'mplayer -identify' earlier.
+	if ( $CHAPTERS ) {
+		if ( exists $IDENTIFY{ID_LENGTH} ) {
+			my $chapters = "0";
+			my $minutes = ( int($IDENTIFY{ID_LENGTH}) / 60 );
+			my $increment = int ( $minutes / $CHAPTERS );
+			my $i = $increment;
+			do {
+				$chapters .= ",0:" . ($i += $increment);
+			} while ( $i <= $minutes );
+			print FILE qq|<dvdauthor>\n\t<vmgm />\n\t<titleset>\n\t\t<titles>\n\t\t\t<pgc>\n\t\t\t\t<vob file="$vid" chapters="$chapters" />\n\t\t\t</pgc>\n\t\t</titles>\n\t</titleset>\n</dvdauthor>\n|;
+		} else {
+			print STDERR "Warning: could not identify length of movie; falling back to 1 chapter\n";
+			$CHAPTERS = 0;
+		}
+	}
+
+
+	if ( ! $CHAPTERS ) {
+		print FILE qq|<dvdauthor>\n\t<vmgm />\n\t<titleset>\n\t\t<titles>\n\t\t\t<pgc>\n\t\t\t\t<vob file="$vid"/>\n\t\t\t</pgc>\n\t\t</titles>\n\t</titleset>\n</dvdauthor>\n|;
+	}
+
+	close(FILE);
+
+	if ( -e "$DVDNAME" ) {
+		die "Error: \"$DVDNAME\" still exists; please remove it.\n";
+	}
+	system("dvdauthor", "-o", $DVDNAME, "-x", $tmpxml);
+	if ( ($? >> 8) == 0 ) {
+		return(1);
+	}
+
+	return(0);
+}
+
+sub test_dvd {
+	my $dvdname = shift; # not really necessary
+	system("mplayer", "dvd://", "-dvd-device", $dvdname);
+}
+
+sub burn_dvd {
+	my ($dvddevice, $dvdname) = @_; # not really necessary
+	system("growisofs", "-dvd-compat", "-Z", $dvddevice, "-dvd-video", $dvdname);
+}
+
+sub identify_srcvid {
+	my $srcvid = shift; # not really necessary
+	for ( `mplayer -really-quiet -ao null -vo null -identify -frames 0 "$srcvid"` ) {
+		chomp;
+		my($a,$b) = split(/=/,$_);
+		$IDENTIFY{$a} = $b;
+	}
+}
+
+sub usage {
+	die <<EOF
+Usage: $0 SRCVID DVDNAME [OPTIONS]
+Where SRCVID is a video in any format to convert to a DVD,
+ and DVDNAME is the name of your new dvd (this will become a directory).
+
+Options:
+  -aspect RATIO			Aspect ratio of the DVD [auto]
+  		   Examples:	1.333333     1.777777    2.350000
+				  4/3          16/9      221/100
+  -ntsc				Makes the movie NTSC [default]
+  -pal				Makes the movie PAL
+  -dvd				Creates a plain DVD [default]
+  -vcd				Creates a VCD [experimental]
+  -svcd				Creates a SVCD [experimental]
+  -chapters N			Make N chapters, spaced out across the film [1]
+  -test				Play the DVD with MPlayer when done
+  -burn				Burn the DVD to -dvd-device
+  -dvd-device DEVICE		Device name of the dvd burner [/dev/dvd]
+  -vol N			Increase volume by N decibels (1-100)
+  -sub SUBTITLE			Use file SUBTITLE to encode subtitles
+  -v				Verbose mode
+
+By default the aspect ratio will be detected and applied.
+Note that DVD standards only support 4/3 and 16/9 aspect ratios, so for
+anything bigger than 16/9 we scale the movie to squish the height and
+add black bars to fit the 16/9 aspect ratio (called Letterboxing).
+EOF
+}
+

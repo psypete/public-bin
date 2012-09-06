@@ -1,0 +1,3 @@
+# Do all host-specific configuration in here
+run echo "Now running configuration for host pinhead"
+

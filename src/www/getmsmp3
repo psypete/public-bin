@@ -1,0 +1,296 @@
+#!/usr/bin/perl
+# getmsmp3 v0.4 - download myspace mp3s
+# Copyright (C) 2007-2008 Peter Willis <peterwwillis@yahoo.com>
+# 
+#             DO WHAT THE FUCK YOU WANT TO PUBLIC LICENSE
+#                     Version 2, December 2004
+# 
+#  Copyright (C) 2004 Sam Hocevar
+#   14 rue de Plaisance, 75014 Paris, France
+#  Everyone is permitted to copy and distribute verbatim or modified
+#  copies of this license document, and changing it is allowed as long
+#  as the name is changed.
+# 
+#             DO WHAT THE FUCK YOU WANT TO PUBLIC LICENSE
+#    TERMS AND CONDITIONS FOR COPYING, DISTRIBUTION AND MODIFICATION
+# 
+#   0. You just DO WHAT THE FUCK YOU WANT TO.
+# 
+
+
+# Changes since 0.03:
+#   - Now licensed under terms of the WTFPL.
+# Changes since 0.02:
+#   - Thanks to Christophe Beauregard for a patch implementing resuming
+#     transfers of downloads
+#   - Ask user if they want to quit if wget is killed
+#   - General clean-up
+# Changes since 0.01:
+#   - No longer depend on LWP::Simple or XML::Simple
+#   - Use wget if it's available
+
+print <<EOF;
+Since this program can only download publically-accessible files with no
+authentication it is assumed all file downloads are legal until MySpace
+decides to implement some DRM or at least a username and password requirement.
+Or heck, even a "please-dont-download-MP3s" click-through license.
+In the meanwhile you the user assume all liability by using this program.
+I the author provide no warranty expressed or implied about anything.
+Use this program at your own risk. You have been warned.
+
+Pass this program the URL to a myspace page with a myspace mp3 player or
+myspace playlist and it will save each MP3 it can find to the current
+directory in a "bandname - songname.mp3" format.
+
+EOF
+
+use strict;
+use LWP::UserAgent;
+use LWP::ConnCache;
+use MIME::Base64 qw(encode_base64 decode_base64);
+use XML::Parser;
+
+# no buffers pls
+select STDERR;
+$|=1;
+select STDOUT;
+$|=1;
+
+my $VERBOSE = 1;
+my $MEDIASRVCURL = "http://mediaservices.myspace.com/services/media/musicplayerxml.ashx";
+
+if ( ! @ARGV ) {
+	die "Usage: $0 MYSPACE_URL ..\n" .
+	 "  Downloads both profile songs and band playlists\n";
+}
+
+my $UA = LWP::UserAgent->new( env_proxy => 1 );
+$UA->env_proxy();
+$UA->conn_cache( LWP::ConnCache->new() );
+
+my $WGET;
+foreach my $dir (split(/:/,$ENV{PATH})) {
+	if ( -x "$dir/wget" ) {
+		$WGET = "$dir/wget";
+		last;
+	}
+}
+
+
+foreach my $PAGE (@ARGV) {
+	my @IDS;
+	my $content = $UA->get($PAGE)->content;
+	my @_IDS = find_mp3s(\$content);
+	foreach my $id (@_IDS) {
+		if ( $id !~ /\^/ ) { # band id
+			push(@IDS, get_band_playlist($id));
+		} else { # song id
+			push(@IDS, $id);
+		}
+	}
+	foreach my $id (@IDS) {
+		print STDERR "INFO: saving mp3 id $id\n" if ($VERBOSE);
+		save_mp3($id);
+	}
+}
+
+exit(0);
+
+sub get_band_playlist {
+	my $id = shift;
+	my %IDS;
+
+	print STDERR "Fetching band playlist ", $id, "\n";
+
+	my $XMLstring = $UA->get("$MEDIASRVCURL?b=$id")->content || die "Error: couldn't get XML: $!\n";
+	my $a = new XML::Parser(Style => "Tree")->parse($XMLstring);
+
+	my $pl_aref;
+	for ( my $i = 0; $i < @{ $a->[1] }; $i++ ) {
+		if ( $a->[1]->[$i] eq "playlist" ) {
+			$pl_aref = $a->[1]->[$i+1];
+			last;
+		}
+	}
+
+	for ( my $i = 0; $i < @$pl_aref; $i++ ) {
+		if ( $pl_aref->[$i] eq "song" ) {
+			my $s_ar = $pl_aref->[$i+1];
+			my $_id = $id . "^" . $pl_aref->[$i+1]->[0]->{bsid};
+			if ( !exists $IDS{$_id} ) {
+				$IDS{$_id} = 1;
+			}
+		}
+	}
+
+	return(keys %IDS);
+}
+
+sub find_mp3s {
+	my $content_r = shift;
+	my %IDS;
+	while ( $$content_r =~ /\"(http:\/\/lads\.myspace\.com\/[^"]+?)"/img ) {
+		my $url = $1;
+		# band playlist
+		if ( $url =~ /\/music\/musicplayer\.swf.+&d=([^&]+?)$/i ) {
+			my $id = (split(/\^/, decode_base64($1)))[0];
+			if ( !exists $IDS{$id} ) {
+				$IDS{$id} = 1;
+			}
+		} elsif ( $url =~ /\/mini\/mini\.swf\?b=([^&]+)&o=([^&]+)/ig ) {
+			my $id = join("^", (decode_base64($2),decode_base64($1)));
+			if ( !exists $IDS{$id} ) {
+				$IDS{$id} = 1;
+			}
+		}
+	}
+	return(keys %IDS);
+}
+
+# the tokens returned are pretty short lived, so it's safest (if not
+# _always_ necessary) to get new ones each time we try to grab some
+# content.
+sub get_token_url {
+	my ($O, $B) = @_;
+
+	print STDERR "INFO: Getting token for ($O,$B)\n" if ($VERBOSE);
+
+	my $XMLstring = $UA->get("$MEDIASRVCURL?b=$O&s=$B")->content || die "Error: could not retrieve XML ($!)\n";
+    print "XMLstring: $XMLstring\n" if ($VERBOSE);
+	my $a = new XML::Parser(Style => "Tree")->parse($XMLstring);
+
+	my %h;
+	for ( my $i = 0; $i < @{ $a->[1] }; $i++ ) {
+		foreach my $key ( "token", "curl", "durl", "bandname", "songname" ) {
+			if ( $a->[1]->[$i] eq $key ) {
+				$h{$key} = $a->[1]->[++$i]->[2];
+				next;
+			}
+		}
+	}
+
+	if ( $h{curl} !~ /&p=(.+)$/ ) {
+		die "Bad p ($h{curl})\n";
+	}
+
+    print "CURL:$h{curl}\n" if ($VERBOSE);
+    print "DURL:$h{durl}\n" if ($VERBOSE);
+	return("$h{durl}?bandid=$O&songid=$B&token=$h{token}&p=$1&a=1", \%h);
+}
+
+# We only use this sub once, but it's cleaner to separate it, i think...
+# TODO: Implement a cleaner method to get content-length without HEAD.
+sub get_content_length {
+	my $url = shift;
+	my $res = $UA->get($url,
+		":content_cb" => sub { die "Ugly HEAD hack" },
+	);
+	if ( ! $res->is_success ) {
+		print STDERR "Failed to get length: ",$res->status_line,"\n";
+		return(-1);
+	}
+
+	# voila, now we know how much we need
+	return( $res->content_length() );
+}
+
+sub download_attempt {
+	my ($file, $url, $start) = @_;
+
+	# I still like using wget; proves how really simple their "authentication" is
+	# and how anyone can exploit it. Myspace, download link please?
+	if ( defined $WGET ) {
+		# Might need to check at what version wget supported this behavior
+		my $r = system($WGET, "-t", "1", "-O", $file, "-c", $url);
+		my $ret = ( $? >> 8 );
+		if ( $ret == 130 or $r == 2 ) {
+			print STDERR "INFO: It looks like wget was killed by the user.\n";
+			print STDERR "Do you want to continue? ";
+			my $input = <STDIN>;
+			chomp $input;
+			if ( $input !~ /^y(es)?$/i ) {
+				print STDERR "You got it; exiting...\n";
+				exit(1);
+			}
+		} elsif ( $ret == 0 and $r == 0 ) {
+			return(1);
+		}
+		return(0);
+	} else {
+		my $fh;
+		open( $fh, '>>', $file) || die $!;
+		my $res = $UA->get($url,
+			":content_cb" => sub {
+				print STDERR '.';       # progress is nice?
+				print $fh $_[0];
+			},
+			# Would 4KB blocks be safer/saner? Or am I nuts...
+			':read_size_hint' => 8192,
+
+			# strictly speaking, zero is a legit start, but I believe not
+			# providing a range for full requests is more "polite" for servers
+			# and caches
+			(defined $start) ? ('Range' => "bytes=$start-") : (),
+			);
+		close $fh;
+
+		return( $res->is_success() );
+	}
+}
+
+# takes "o=" and "b=" base64-encoded form elements as arguments
+# optionally a file name to save to, or "guesses"
+sub save_mp3 {
+	my ($O, $B) = split(/\^/, $_[0]);
+
+	# maybe it's just me, but transfers seem to drop _often_. So we often
+	# need multiple attempts to get the whole file.
+
+	# This call is only to get the content_length;
+	#  kinda wasteful, but should be harmless
+
+	my ($tmpurl, $tmph)= get_token_url($O, $B);
+	my $total = get_content_length( $tmpurl );
+
+	if ( $total < 0 ) {
+		print STDERR "Error: could not get content_length for \"$tmpurl\"\n";
+		return();
+	}
+
+	for ( ;; ) {
+		my $h;
+		my @file;
+		my ($newurl, $h) = get_token_url($O, $B);
+
+		foreach my $crap ($h->{bandname}, $h->{songname}) {
+			push(@file, $crap) if (defined $crap and length $crap > 0);
+		}
+
+		my $file = ( join(" - ", @file) || "$O-$B" ) . ".mp3";
+		my $start = -s $file;
+
+		if( defined $start and $start >= $total ) {
+			print "Already have all of '$file'\n";
+			last;
+		}
+
+		# might have a partial download. We can resume it if so, or at
+		# least we'll skip over completely fetched files.
+		if ( defined $start ) {
+			print "Resuming \"$file\" at byte $start (".($total-$start)." bytes left)\n";
+		} else {
+			print "Saving \"$file\" ($total bytes)\n";
+		}
+
+		my $ret = download_attempt( $file, $newurl, $start );
+		my $end = -s $file;
+
+		if ( $end < $total ) {
+			print "\nOnly got $end of $total bytes; retrying\n";
+		} else {
+			print "\nSuccess.\n";
+			last;
+		}
+	}
+}
+

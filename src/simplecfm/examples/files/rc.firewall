@@ -1,0 +1,37 @@
+#!/bin/sh
+# /etc/rc.d/rc.firewall
+#
+
+# Start IP firewalling:
+firewall_start() {
+    /usr/sbin/iptables-restore < /etc/iptables.conf
+    /usr/sbin/ip6tables-restore < /etc/ip6tables.conf
+}
+
+# Stop IP firewalling:
+firewall_stop() {
+    /usr/sbin/iptables-restore < /etc/iptables-EMPTY.conf
+    /usr/sbin/ip6tables-restore < /etc/ip6tables-EMPTY.conf
+}
+
+# Restart IP firewalling:
+firewall_restart() {
+  firewall_stop
+  sleep 1
+  firewall_start
+}
+
+case "$1" in
+'start')
+  firewall_start
+  ;;
+'stop')
+  firewall_stop
+  ;;
+'restart')
+  firewall_restart
+  ;;
+*)
+  echo "usage $0 start|stop|restart"
+esac
+

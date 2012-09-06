@@ -1,0 +1,68 @@
+#!/bin/sh
+# expectscp - log into boxes automatically using only a password and copy files
+# Copyright (C) 2010 Peter Willis <peterwwillis@yahoo.com>
+
+function dohost() {
+    local HOST="$1"
+    local LFOO=$(echo "$LOCAL" | sed -e "s/\([\`\"\$\]\)/\\\\\1/g")
+    local RFOO=$(echo "$REMOTE" | sed -e "s/\([\`\"\$\]\)/\\\\\1/g")
+
+    expect -c "
+        set prompt \"(%|#|\\\$) $\"      ;# default prompt
+        set timeout 10
+        match_max 100000
+        spawn scp -o NumberOfPasswordPrompts=1 -o PasswordAuthentication=yes \"$LFOO\" \"$USER@$HOST:$RFOO\"
+        expect {
+            stty -echo
+            \"*yes/no*\" { send \"yes\r\"; exp_continue }
+            \"*assword:\" { send \"$PASS\r\"; exp_continue }
+            stty echo  
+        }
+        exit
+    "
+}
+
+OPTIONS=""
+LOCAL=""
+REMOTE=""
+USER=`id -nu`
+
+C=0
+while [ $# -gt 0 ] ; do
+    case "$1" in
+        "-u")
+            USER="$2"; shift 2;;
+        "-r")
+            OPTIONS="$OPTIONS -r"; shift 1; echo "left: $@" ;;
+        *)
+            if [ ! -n "$LOCAL" ] ; then
+                LOCAL="$1"; shift 1;
+            elif [ ! -n "$REMOTE" ] ; then
+                REMOTE="$1"; shift 1;
+            else
+                HOSTS[$C]="$1"; C=$(($C+1)); shift 1;
+            fi ;;
+    esac
+done
+
+if [ $C -lt 1 -o "$1" = "-h" -o "$1" = "--help" ] ; then
+    echo "Usage: $0 [OPTIONS] LOCAL REMOTE HOST [HOST ..]"
+    echo "Copies LOCAL file to HOST:REMOTE."
+    echo "Prompts first for a password to give to HOST."
+    echo ""
+    echo "Options:"
+    echo "  -r              Recursive mode"
+    echo "  -u USER         User to connect with"
+    exit 1
+fi
+
+PASS=""
+echo -en "Gime dat pass: "
+stty -echo 2>/dev/null
+read PASS
+stty echo 2>/dev/null
+
+for i in `seq 0 $(($C-1))` ; do
+    dohost ${HOSTS[$i]}
+done
+

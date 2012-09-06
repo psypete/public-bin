@@ -1,0 +1,58 @@
+#!/bin/sh
+# wpa-on - turn wpa_supplicant on
+# Copyright (C) 2009 Peter Willis <peterwwillis@yahoo.com>
+# 
+# Get wpa going.
+# Driver auto-detection 2.6+ kernels only
+
+WPA_SUPPLICANT="/usr/sbin/wpa_supplicant"
+WPA_CONFIG="-c /etc/wpa_supplicant.conf"
+# Default driver to use if we can't auto-detect it
+WPA_DRIVER="-Dwext"
+# Wait for interface to appear if it doesn't already
+WAIT_FOR_INTERFACE="-w"
+# Add some debug crap
+DEBUG="-d"
+
+function find_card_driver() {
+    local intf="$1"
+    local mod=`basename $(readlink /sys/class/net/$intf/device/driver/module)`
+    # Some basic crap matching here
+    if echo "$mod" | grep -q -i "atmel" ; then
+        echo "atmel"
+    elif echo "$mod" | grep -q -i "hostap" ; then
+        echo "hostap"
+    elif echo "$mod" | grep -q -i "ndiswrapper" ; then
+        echo "ndiswrapper"
+    elif echo "$mod" | grep -q -i "ipw" ; then
+        echo "ipw"
+    else
+        echo "wext"
+    fi
+}
+
+function wpa_on() {
+    local intf="$1"
+    local pidfile="/var/run/wpa_supplicant-$intf.pid"
+    local driver=`find_card_driver "$intf"`
+    echo "$0: $intf"
+    echo "$0: $intf" | logger
+    sudo $WPA_SUPPLICANT -D $driver -i $intf $WPA_CONFIG $DEBUG $WAIT_FOR_INTERFACE -P $pidfile -B
+}
+
+if [ "$1" = "-h" -o "$1" = "--help" ] ; then
+    echo "Usage: $0 [INTERFACE ..]"
+    echo "Turns wpa_supplicant on."
+    exit 1
+fi
+
+if [ $# -lt 1 ] ; then
+    for a in `/sbin/iwconfig 2>&1 | grep 'IEEE 802\.1' | awk '{print $1}'` ; do
+        wpa_on "$a"
+    done
+else
+    for a in "$@" ; do
+        wpa_on "$a"
+    done
+fi
+

@@ -1,0 +1,14 @@
+#!/usr/bin/perl
+opendir DIR,"/proc";
+for ( grep /^\d+$/, readdir DIR ) {
+    open F, "/proc/$_/status";
+    $p{$1} = $2 while ( <F> =~ /^(\w+):\s+(\S+)/g );
+    close F;
+    open F, "/proc/$_/statm";
+    @m = split /\s+/, <F>;
+    close F;
+    $h{ getpwuid($p{"Uid"}) } += ($m[1]-$m[2])  if ($p{"Name"} eq "httpd" and $p{"PPid"} ne "1");
+}
+while ( my ($k,$v) = each %h ) {
+    print "Rss for $k: " . int( (($v*4096)/1024) /1024) . "MB\n";
+}

@@ -1,0 +1,224 @@
+#!/usr/bin/perl
+# rpmchk - rpm integrity checker
+# Copyright (C) 2009 Peter Willis <peterwwillis@yahoo.com>
+# 
+# This script does what i've needed a thousand times but never had the boredom to complete:
+# it tells you before you put a conflicting RPM in your repository.
+# It goes through the usual rigor that I test manually to see if a package is going to
+# break anything before I push it. This includes checking for conflicting files, duplicate
+# provides, inequal architectures, etc. As I find more common problems i'll add more checks.
+# 
+# In order to speed up the general use of the program a Berkeley DB is used to store and
+# retrieve information about RPMs in local repositories for a time/space performance boost.
+# You need to build your index if it doesn't exist, and rebuild it each time your repository
+# changes. On my system it doesn't take much time at all and it won't hurt anything for you
+# to rebuild it every time you run the application.
+
+# goals:
+# 1. index all rpms in each repository queried. -DONE
+# 1a. names, versions, architectures, files, requires, provides, obsoletes. -DONE
+# 2. index all the same information in a given package. -DONE
+# 3. compare similar values to see if a conflict will arise.
+# 3a. compare name, version, arch of package with the packages in the repos.
+# 3b. compare files between package and packages in repos. -DONE
+# 3c. see if package will be obsoleted.
+# 3d. see if package's provides are already provided by something else.
+# 3e. see if package's requires exist in any of the repos.
+
+use strict;
+use DB_File;
+use Storable qw(freeze thaw);
+use Getopt::Long;
+
+my $IDX_FILE = "repo_idx.db";
+my $REBUILD_IDX = 0;
+my $DEFAULT_UMASK = 0777;
+my $RPMPIPE = qq|/bin/rpm -q --qf "[%{NAME};@;%{EPOCH};@;%{VERSION};@;%{RELEASE};@;%{ARCH};@;[%{REQUIRES};-;];@;[%{PROVIDES};-;];@;[%{OBSOLETES};-;]\\n[%{FILENAMES}\\n]\\n]"|;
+my $NOTGOOD = 0;
+my @REPOS;
+my @PACKAGES;
+my %PKGS;
+my %_o = ( 'i|rebuild-index' => \$REBUILD_IDX, 'r|repo=s' => \@REPOS, 'o|output-db' => \$IDX_FILE );
+
+if ( ! @ARGV ) {
+    usage();
+}
+GetOptions (%_o);
+@PACKAGES = @ARGV;
+
+if ( ! @REPOS ) {
+    print STDERR "Error: need to specify some repositories\n";
+    usage();
+}
+if ( ! @PACKAGES ) {
+    print STDERR "Error: need to specify some packages\n";
+    usage();
+}
+
+main();
+
+
+sub main {
+    my ($X, %db);
+
+    if ( $REBUILD_IDX ) {
+        print STDERR "$0: Rebuilding index of repositories...\n";
+        my $flags = -e $IDX_FILE ? O_RDWR : O_CREAT|O_RDWR;
+        my $x = tie my %db, 'DB_File', $IDX_FILE, $flags, $DEFAULT_UMASK, $DB_HASH;
+        if ( ! $x ) {
+            die "Error opening database: $! ($@)\n";
+        }
+
+        make_index(\%db, @REPOS);
+
+        untie %db;
+        undef $x;
+    }
+
+    # This is way overkill, but whatever...
+    # Index the user-supplied packages and make the %PKGS array
+    my %pkgs;
+    make_index(\%pkgs, @PACKAGES);
+    for ( my $i = 0; $i <= $pkgs{'last'}; $i++ ) {
+        my $pkg = {
+            pkg => thaw($pkgs{"pkgi:$i"}) ,
+            pkg_files => { split(/\000/, $pkgs{"pkgf:$i"}) }
+        };
+        $PKGS{$i} = $pkg;
+    }
+
+    # Open database
+    $X = tie %db, 'DB_File', $IDX_FILE, O_RDONLY, $DEFAULT_UMASK, $DB_HASH;
+
+    # Start iterating over packages in the database
+    for ( my $i = 0; $i <= $db{'last'}; $i++ ) {
+        my $obj = {
+            pkg => thaw($db{"pkgi:$i"}) ,
+            pkg_files => { split(/\000/, $db{"pkgf:$i"}) }
+        };
+        check_for_conflicting_files(\%db, $obj);
+        check_for_conflicting_provides(\%db, $obj);
+        # check_for_missing_requires();
+        # check_for_obsoletion();
+        # check_for_duplicate_package_name();
+        # check_for_duplicate_package_different_arch();
+    }
+
+    if ( $NOTGOOD ) {
+        exit(1);
+    }
+
+    exit(0);
+
+}
+
+
+sub check_for_conflicting_provides {
+    my $db = shift;
+    my $o = shift;
+    
+}
+
+# Run through every package in the database.
+# For each file, loop over the files and do a hash lookup to see if a given file
+# exists in a hash index from one of the packages passed.
+# My theory is this may be more efficient than creating a hash for each package
+# in the database's files and looping over the files in the packages we pass
+sub check_for_conflicting_files {
+    my $db = shift;
+    my $o = shift;
+    foreach my $pkg (values %PKGS) {
+        foreach my $file ( keys %{ $pkg->{'pkg_files'} } ) {
+            # If the file from the database package exists in a package passed by a user
+            if ( exists $o->{'pkg_files'}->{$file} ) {
+                print "$0: file conflict: \"$file\" from $pkg->{pkg}->{epoch}:$pkg->{pkg}->{name}-$pkg->{pkg}->{version}-$pkg->{pkg}->{release} matches db pkg $o->{pkg}->{epoch}:$o->{pkg}->{name}-$o->{pkg}->{version}-$o->{pkg}->{release}\n";
+                $NOTGOOD++;
+            }
+        }
+    }
+}
+
+
+# Go through repos or packages on the local disk and serialize their rpm contents into a hash
+sub make_index {
+    my $db = shift;
+    my @args = @_;
+    my $flags = O_RDONLY;
+    my $obj = { idx => 0 , pkg => { } };
+
+    foreach my $arg (@args) {
+
+        # If arg was a directory, tack a '*.rpm' on the end
+        if ( -d $arg ) {
+            $arg =~ s/\/$//g;
+            $arg = "$arg/*.rpm";
+        }
+
+        open(PIPE, "$RPMPIPE -p $arg 2>/dev/null |") || die "Error: could not open rpm for package listing: $! ($RPMPIPE -p $arg)\n";
+        # aap;@;1;@;1.090;@;4;@;i386;@;/usr/bin/env;-;rpmlib(CompressedFileNames);-;rpmlib(PayloadFilesHavePrefix);-;;@;aap;-;;@;(none)
+        # /usr/bin/aap
+        # /usr/lib/aap
+        # /usr/lib/aap/Exec-1.090
+        # /usr/lib/aap/Exec-1.090/AapVersion.py
+
+        while ( <PIPE> ) {
+            chomp;
+            s/\000/ /g; # for when we pack into db. there shouldn't be any nulls in data or file names
+            next if /^\s*?$/;
+            my @pkginfo = split(/;@;/, $_);
+            # we have a new package
+            if ( @pkginfo == 8 ) { # 8 == number of fields from rpm query above
+                my @requires = split(/;-;/, $pkginfo[5]);
+                my @provides = split(/;-;/, $pkginfo[6]);
+                my @obsoletes = split(/;-;/, $pkginfo[7]);
+
+                # We already had a full %pkg entry, so freeze it into the db
+                if ( %{ $obj->{pkg} } ) {
+                    store_pkg($db, $obj);
+                }
+
+                $obj->{pkg} = { name => $pkginfo[0], epoch => $pkginfo[1], version => $pkginfo[2], release => $pkginfo[3], arch => $pkginfo[4], requires => [ @requires ], provides => [ @provides ], obsoletes => [ @obsoletes ], idx => $obj->{idx} };
+            } else {
+                push( @{$obj->{pkgf}} , $_ );
+            }
+        }
+
+        # As above, if an existing %pkg was filled out, freeze it to the db
+        if ( %{$obj->{pkg}} ) {
+            store_pkg($db, $obj);
+        }
+    }
+
+    # Timestamp the last time idx was written
+    if ( $REBUILD_IDX ) {
+        $db->{'lastupdate'} = time();
+        $db->{'last'} = ($obj->{idx} - 1);
+    }
+}
+
+
+sub store_pkg {
+    my $db = shift;
+    my $obj = shift;
+    $db->{ "pkgi:$obj->{idx}" } = freeze($obj->{pkg});
+    # Pack each with an extra '1' so we can quickly create a hash later
+    $db->{ "pkgf:$obj->{idx}" } = join("\000"."1"."\000", @{ $obj->{pkgf} }) . "\000"."1";
+    $db->{ "ngkp:$obj->{pkg}->{name}" } = $obj->{idx};
+    %{$obj->{pkg}} = ( );
+    @{$obj->{pkgf}} = ( );
+    $obj->{idx}++;
+}
+
+
+sub usage {
+    die <<EOF;
+Usage: $0 [OPTIONS] -r REPO PACKAGE
+Checks if a PACKAGE will conflict with anything in REPO.
+
+Options:
+  -r,--repo REPO        Repository to index rpms from
+  -i,--index            Rebuild index of rpms from repository
+  -o,--output-db FILE   File to write database to (default: $IDX_FILE)
+EOF
+}
+

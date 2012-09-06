@@ -1,0 +1,24 @@
+#!/usr/bin/perl
+use File::Find;
+my %results;
+
+die "Usage: $0 DIR\n" if ( ! @ARGV );
+
+find sub {
+  if (-l) { # it's a symlink
+    my ($dev, $ino) = lstat _; # reuse info from -l
+    push @{$results{"$dev $ino"}}, $File::Find::name;
+    if (-e) { # that points somewhere else
+      my ($dev, $ino) = stat _; # reuse info from -e
+      push @{$results{"$dev $ino"}}, "symlink:$File::Find::name";
+    }
+  } else {
+    my ($dev, $ino) = stat;
+    push @{$results{"$dev $ino"}}, $File::Find::name;
+  }
+}, @ARGV; # change this to "/" to do the whole disk
+while (my($k, $v) = each %results) {
+  my @links = @$v;
+  next if @links < 2;
+  print "@links\n";
+}

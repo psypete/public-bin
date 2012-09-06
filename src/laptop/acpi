@@ -1,0 +1,14 @@
+#!/bin/sh
+# print acpi stats
+
+for dir in /proc/acpi/battery/BAT* ; do
+	[ -d "$dir" ] || continue
+	full=`cat $dir/info | grep 'design capacity:' | awk '{print $3}'`
+	state=`cat $dir/state | grep 'remaining capacity:' | awk '{print $3}'`
+	[ -z "$full" -o -z "$state" ] && continue
+	left=`printf "%.2f" $(echo "$state/$full" | bc -l) | sed -e 's/\.//g;s/^0//g'`
+	echo "Battery `basename $dir` left:		$left%"
+done
+
+CHARGER=`cat /proc/acpi/ac_adapter/AC*/state 2>/dev/null || echo "state: unavailable"`
+echo "AC charger:			`echo "$CHARGER" | awk '{print $2}'`"

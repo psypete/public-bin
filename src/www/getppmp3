@@ -1,0 +1,362 @@
+#!/usr/bin/perl
+# getppmp3 v1.2 - search for songs
+# Copyright (C) 2008 Peter Willis <peterwwillis@yahoo.com>
+
+# Changes since 1.0:
+#   - Skip playlists we've already parsed
+#   - Fix search to work with new javascript data structure.
+#   - TODO: find an HTML-less way to return search results
+# Changes since 1.1:
+#   - Fix searching to do more than 1 page when result pages
+#     are >8.
+
+
+$|=1;
+
+print <<EOF;
+This program can search for songs on a social music website.
+The search function provides the user with the same basic information displayed
+through the site's search function. Please follow all Terms Of Service related
+to the website and service while using this program, and follow all local, state
+and federal laws as relates to the use of the service and its content.
+
+You the user assume all liability by using this program.
+I the author provide no warranty expressed or implied about anything.
+Use this program at your own risk. You have been warned.
+
+EOF
+
+use strict;
+use LWP::UserAgent;
+use XML::Parser;
+use URI::Escape;
+
+my @SEARCHES;
+my $SEARCH_URL = 'http://search.playlist.com/tracks/';
+my $TEST = 1;
+my $DECODE = 0;
+my $NOFLIP = 0;
+my $NOVERIFY = 0;
+my $GREEDY = 0;
+my $ARTISTSEARCH = 0;
+my $TITLESEARCH = 0;
+my $urltranslator = "sdf883jsdf22";
+
+for ( @ARGV ) {
+    if ( /^-g$/ ) {
+        $GREEDY = 0;
+    } elsif ( /^-t/ ) {
+        $ARTISTSEARCH = 0;
+        $TITLESEARCH = 1;
+    } elsif ( /^-a/ ) {
+        $ARTISTSEARCH = 1;
+        $TITLESEARCH = 0;
+    } elsif ( /^-n/ ) {
+        $NOFLIP = 1;
+    } elsif ( /^-V/ ) {
+        $NOVERIFY = 1;
+    } elsif ( /^-d/ ) {
+        $DECODE = 1;
+    } else {
+        push @SEARCHES, $_;
+    }
+}
+
+if ( ! @SEARCHES ) {
+    die "Usage: $0 [OPTIONS] SEARCHSTRING [..]\n\n  Options:\n    -n\t\tDon't auto-correct filenames\n    -g\t\tGreedily search for all songs, regardless of artist/title\n    -t\t\tTitle search\n    -a\t\tArtist search\n    -d\t\tDecode URLs\n\nIf you provide a URL instead of a search string, that will be grepped for a playlist to search.\n";
+}
+
+foreach my $search (@SEARCHES) {
+
+    my $urls;
+
+    # Look for a playlist if it's a URL
+    if ( $search =~ /^http:\/\//i ) {
+        $urls = parse_xml_urls($search);
+    } else {
+        my $search_string = uri_escape($search);
+        $search_string =~ s/\%20/-/g;
+        my $uri_search = $SEARCH_URL . $search_string;
+        $urls = search_urls($uri_search, $search);
+    }
+
+    display($urls, $search);
+
+}
+
+sub parse_xml_urls {
+    my $page = shift;
+    
+    print "INFO: Browsing page \"$page\" ...\n";
+    my $UA = LWP::UserAgent->new( env_proxy => 1 );
+    $UA->timeout(60); # Basic default timeout
+    my $CONTENT = $UA->get($page)->content;
+    my %urls;
+    my %playlists;
+
+    print "INFO: Checking page $page for playlists...\n";
+
+    while ( $CONTENT =~ /(http:\/\/[^\/]+\/loadplaylist\.php\?playlist=(\d+))/img ) {
+        my ($url, $id) = ($1, $2);
+        my $playlist = "http://www.musicplaylist.net/loadplaylist.php?playlist=$id";
+
+        if ( exists $playlists{$playlist} ) {
+            next;
+        } else {
+            $playlists{$playlist} = 1;
+        }
+
+        print "INFO: Searching playlist \"$playlist\"\n";
+
+        my $XMLstring = $UA->get($playlist)->content || die "Error: couldn't get XML: $!\n";
+
+        # Yes, for some reason the XML parser is crashing on some weird
+        # HTML restriction...
+        
+        # First remove binary crap
+        $XMLstring =~ s/[^[:print:][:space:]]+//img;
+
+        # The following is messy but it works fairly well
+        # Catch these two:
+        $XMLstring =~ s/&amp;/__;AMP;__/img;
+        $XMLstring =~ s/&#(\d+);/__;DIGIT:$1;__/img;
+
+        # Now remove everything with &;, which should be all examples
+        # with & if it is "correct" XML... i think
+        $XMLstring =~ s/&[^;]+;//img;
+
+        # Now put back the saved ones
+        $XMLstring =~ s/__;AMP;__/&amp;/img;
+        $XMLstring =~ s/__;DIGIT:(\d+);__/&#$1;/img;
+
+        my $a = new XML::Parser(Style => "Tree")->parse($XMLstring);
+
+        # I know, I know... I blame XML::Parser.
+        for ( my $i=0; $i<@$a; $i++ ) {
+            # Look for 'playlist'
+            if ( $a->[$i] eq "playlist" ) {
+
+                my $pl_aref = $a->[++$i];
+                # Look for 'trackList'
+                for ( my $j=0; $j<@$pl_aref; $j++ ) {
+                    if ( $pl_aref->[$j] eq "trackList" ) {
+                        my $tl_aref = $pl_aref->[++$j];
+                        for ( my $k=0; $k<@$tl_aref; $k++ ) {
+                            if ( $tl_aref->[$k] eq "track" ) {
+                                my $track = $tl_aref->[++$k];
+                                my ($url, $annotation_s);
+                                for ( my $l=0; $l<@$track; $l++ ) {
+                                    if ( $track->[$l] eq "location" ) {
+                                        my $location = $track->[++$l];
+                                        for ( my $m=0; $m<@$location; $m++ ) {
+                                            if ( $location->[$m] =~ /^([0-9a-f]+|http:\/\/.+)$/ ) {
+                                                $url = $1;
+                                            }
+                                        }
+                                    } elsif ( $track->[$l] eq "annotation" ) {
+                                        my $annotation = $track->[++$l];
+                                        for ( my $m = 0; $m < @{ $annotation }; $m++ ) {
+                                            if ( $annotation->[$m] =~ /(\w+|\-\-)/ ) {
+                                                $annotation_s = $annotation->[$m];
+                                            }
+                                        }
+                                    }
+                                }
+                                if ( defined $url and !exists $urls{$url} ) {
+                                    if ( defined $annotation_s ) {
+                                        $urls{$url} = $annotation_s;
+                                    } else {
+                                        $urls{$url} = 1;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                last;
+            }
+        }
+    }
+
+    if ( keys(%urls) < 1 ) {
+        print "Error: Found no playlists or the server was unresponsive.\nError: Please try again or check that the page has a valid playlist on it.\n";
+    }
+
+    return(\%urls);
+}
+
+sub search_urls {
+
+    my $uri = shift;
+    my $search = shift;
+    my $last_page = 1;
+    my %urls;
+
+    for ( my $page = 1; $page <= $last_page; $page++ ) {
+
+        my $uripage = "$uri/$page";
+        print "INFO: Browsing page \"$uripage\"\n";
+        my $CONTENT = LWP::UserAgent->new()->get($uripage)->content;
+
+        my $foundpages = 0;
+        my $founddup = 0;
+
+        # First, search for URLs.
+        # This is ridiculously easy since now all the data we want
+        # is in a javascript datastructure.
+        #while ( $CONTENT =~ /^(.*onclick="loadPlayer\('([0-9a-f]+)'.*$)/img ) {
+        my $ds;
+        if ( $CONTENT =~ /var\s+trackdata\s+=\s+\[\s*?(.+?)\];/isg ) {
+            my $ds = $1;
+            while ( $ds =~ /{(.+)?}/img ) {
+                my $song = $1;
+                my ($artist, $title, $url, $searchmatch);
+                my %shash;
+                my $duplicate = 0;
+                while ( $song =~ /(\"(\w+)\":(\w+),?|\"(\w+)\":"([^"]+)",?)/img ) {
+                    my ($all, $key1, $val1, $key2, $val2) = ($1, $2, $3, $4, $5);
+                    if (defined $key1 and defined $val1) {
+                        $shash{$key1} = $val1;
+                    } elsif (defined $key2 and defined $val2) {
+                        $shash{$key2} = $val2;
+                    }
+                }
+
+                ($artist, $title, $url, $searchmatch) = ($shash{artist}, $shash{title}, $shash{song_url}, "$shash{artist} - $shash{title}");
+
+                while ( my ($url_k,$url_v) = each %urls ) {
+                    if ( $url_k eq $url and length($url_v) > 0 ) {
+                        $duplicate = 1;
+                    }
+                }
+
+                if ( $GREEDY == 0 and
+                    (
+                        ( $ARTISTSEARCH && $artist !~ /$search/i ) ||
+                        ( $TITLESEARCH && $title !~ /$search/i ) ||
+                        ( $searchmatch !~ /$search/i )
+                    )
+                ) {
+                    next;
+                }
+
+                if ( ! $duplicate ) {
+                    $urls{$url} = $searchmatch;
+                    $foundpages++;
+                } else {
+                    $founddup++;
+                }
+            }
+
+        }
+
+        # They won't show us "end" until we have the last page in sight,
+        # since they only go about 8 pages at a time now, so just collect
+        # digits until they're all used up.
+        # At some point i'll come up with a semi-intelligent way to gather
+        # the last page. (Binary tree sort?)
+
+        # search from pos 0 since the last regex totally leaves us hanging
+        pos($CONTENT) = 0;
+        while ( $CONTENT =~ /<a href="[^"]+?(\d+)" rel="page"/img ) {
+            if ( $1 > $last_page ) {
+                $last_page = $1;
+            }
+        }
+
+    }
+
+    return(\%urls);
+
+}
+
+sub display {
+
+    my $urls = shift;
+    my $search = shift;
+
+    foreach my $url ( keys %{$urls} ) {
+        my $origurl = $url;
+        my $songname;
+
+        # Translate the URLs returned from the service into their final
+        # uri name.
+        if ( $url =~ /^[0-9a-fA-F]+$/ and $DECODE ) {
+            my $binary = pack("H*", $url);
+            $url = decode_rc4($urltranslator, $binary);
+        }
+
+        # First, see if there was a song found by the search functions.
+        # Needs to be longer than 1 char/byte/whatever
+        # (because i think "1" would match for length() > 0)
+        if ( length($urls->{$origurl}) > 1 and $urls->{$origurl} =~ /\w+/ ) {
+
+            $songname = $urls->{$origurl};
+            $songname =~ s/<[^>]+>//g; # strip any html; hopefully there wouldn't be any here anyway
+
+        # Otherwise, try to find some file name in the URL
+        } elsif ( $url =~ /\/([^\/]+)$/ ) {
+            
+            my $uri_fn = $1;
+            if ( $uri_fn =~ /^\d+\.[^.]+$/ ) {
+                $songname = undef;
+            } else {
+                # URI-Escape the name, just incase
+                if ( $uri_fn !~ /\%/ ) {
+                    $uri_fn = uri_escape($uri_fn);
+                }
+                $songname = $uri_fn;
+            }
+        }
+
+        if ( !defined $songname ) {
+            print STDERR "Warning: no proper name found for \"$url\"; skipping\n";
+            return();
+        }
+
+        # Clean it up slightly
+        $songname =~ s/\%20/ /g;
+
+        # Flip around title -- artist
+        if ( ! $NOFLIP ) {
+            $songname =~ s/^(.+)\s+--\s+(.+)$/$2 - $1/g;
+        }
+
+        print "INFO: Found \"$songname\" ($url)\n";
+    }
+
+}
+
+# Taken originally from Net::SSH::Perl::Crypt::RC4
+# and modified to fit the requirements of the translator.
+sub decode_rc4 {
+        my ($key, $text) = @_;
+
+        my $blocksize = 8;
+        my $keysize = 16;
+        my $trans = '';
+        my ($x,$y,$s);
+
+        $key = substr($key, 0, $keysize);
+        my @k = unpack 'C*', $key;
+        my @s = (0..255);
+        $y = (0);
+        for my $x (0..255) {
+                $y = ($k[$x % @k] + $s[$x] + $y) % 256;
+                @s[$x, $y] = @s[$y, $x];
+        }
+        $s = \@s;
+        $x = 0;
+        $y = 0;
+
+        for my $c (unpack 'C*', $text) {
+                $x = ($x + 1) % 256;
+                $y = ( $s->[$x] + $y ) % 256;
+                @$s[$x, $y] = @$s[$y, $x];
+                $trans .= pack('C', $c ^= $s->[( $s->[$x] + $s->[$y] ) % 256]);
+        }
+
+        return($trans);
+}
+

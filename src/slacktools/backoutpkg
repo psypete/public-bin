@@ -1,0 +1,89 @@
+#!/bin/sh
+# backoutpkg - re-create installed Slackware packages
+# Copyright (C) 2005  Peter Willis <psyphreak@phreaker.net
+
+# NOTES
+# 
+# * If you run the script as a normal user, you're in danger of permissions for
+#   files like install/doinst.sh being that of the normal user. Stupid tar...
+
+# TODO
+# 
+# * Fix the mode on mknods in doinst.sh
+
+TMPDIR="/tmp/backoutpkg-$$-$RANDOM"
+if [ -n "$USER" ] ; then TMPDIR="$TMPDIR-$USER"
+elif [ -n "$LOGNAME" ] ; then TMPDIR="$TMPDIR-$LOGNAME" ; fi
+[ -n "$ROOT" ] || ROOT=
+OPWD=`pwd`
+
+function backout {
+	P="$1"
+	# prep install script for /dev entries
+	[ -d "$TMPDIR/install" ] || mkdir "$TMPDIR/install"
+	# add binaries, plain files; ignore dirs
+	cat "$ROOT/var/log/packages/$P" | grep -v "/$" | while read LINE ; do
+		if [ -f "$ROOT/$LINE" ] ; then
+			echo "Adding file /$LINE ..."
+			tar -C "$ROOT/" -rf "$OPWD/$P.tar" "$LINE"
+		elif [ -e "$ROOT/$LINE" ] ; then
+			echo "Adding device /$LINE ..."
+			L=`/bin/ls -l "$ROOT/$LINE"`
+			DTYPE=`echo "$L" | cut -c 1`
+			MAJOR=`echo "$L" | awk '{print $5}' | awk -F , '{print $1}'`
+			MINOR=`echo "$L" | awk '{print $6}'`
+			# FIXME: THIS IGNORES MODE!
+			if [ "$DTYPE" = "p" ] ; then # handle pipes correctly
+				echo "mknod \"$LINE\" $DTYPE" >> "$TMPDIR/install/_doinst.sh"
+			else
+				echo "mknod \"$LINE\" $DTYPE $MAJOR $MINOR" >> "$TMPDIR/install/_doinst.sh"
+			fi
+		fi
+	done
+	# create doinst.sh
+	if [ -e "/var/log/scripts/$P" ] ; then
+		echo "Adding install/doinst.sh ..."
+		cp -f "/var/log/scripts/$P" "$TMPDIR/install/doinst.sh"
+	fi
+	# add device mknods to doinst.sh
+	if [ -e "$TMPDIR/install/_doinst.sh" ] ; then
+		[ -e "$TMPDIR/install/doinst.sh" ] || echo "#!/bin/sh" > "$TMPDIR/install/doinst.sh"
+		cat "$TMPDIR/install/_doinst.sh" >> "$TMPDIR/install/doinst.sh"
+		rm -f "$TMPDIR/install/_doinst.sh"
+	fi
+	# add install/doinst.sh to tarball
+	chmod 0755 "$TMPDIR/install/doinst.sh"
+	tar -C "$TMPDIR" -rvf "$OPWD/$P.tar" install/doinst.sh
+	rm "$TMPDIR/install/doinst.sh"
+	rmdir "$TMPDIR/install"
+	# compresssss!
+	gzip -9 -f "$OPWD/$P.tar" &&
+	mv "$OPWD/$P.tar.gz" "$OPWD/$P.tgz"
+}
+
+if [ ! -d "$TMPDIR" ] ; then
+	mkdir -p "$TMPDIR"
+	if [ $? -ne 0 ] ; then
+		echo "Error making temporary directory; exiting"
+		exit 1
+	fi
+fi
+
+while [ $# -gt 0 ] ; do
+	PKG="$1"
+	shift
+	PKG=`basename "$PKG"`
+	if [ ! -e "$ROOT/var/log/packages/$PKG" ] ; then
+		echo "Error: package \"$PKG\" does not exist."
+		rm -rf "$TMPDIR"
+		exit 1
+	fi
+	backout "$PKG"
+	if [ $? -eq 0 ] ; then
+		echo "Package $PKG.tgz created successfully!"
+	else
+		echo "Package $PKG.tgz was not created successfully :("
+	fi
+done
+
+rm -rf "$TMPDIR"

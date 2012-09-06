@@ -1,0 +1,61 @@
+#!/bin/sh
+# spec2tgz - don't have a SlackBuild? use the spec/srpm/tarball.
+# Copyright (C) 2009 Peter Willis <peterwwillis@yahoo.com>
+
+function package_dir() {
+    local NV="$1"
+    echo "RPM BUILD SUCCESSFUL."
+    # Now we need to do the annoying legwork and attempt to copy the
+    # ownership and permissions of the built RPMs. If slack packages
+    # would just grow up and keep a similar simple method of building
+    # packages without requiring root we wouldn't need all this bullshit.
+
+    echo "NOW ENTER ROOT PASSWORD TO FINISH PACKAGING."
+    su -c "cd $TMPPATH && makepkg -c n -l y $CWD/$NV-i486-1s2t.tgz"
+    if [ $? -eq 0 ] ; then
+        echo "PACKAGE $NV-i486-1s2t.tgz CREATED SUCCESSFULLY."
+    else
+        echo "PACKAGE CREATION FAILED!"
+        return 1
+    fi
+    return 0
+}
+
+function build_file() {
+    local FILE="$1"
+    local BNAME NAMEVER
+    if echo "$FILE" | grep -q -i -e "\.src\.rpm$" ; then
+        BNAME=`basename "$FILE" .src.rpm`
+        NAMEVER=`rpm -q --qf "%{NAME}-%{VERSION}\n" -p "$FILE" | head -n1`
+        rpmbuild --buildroot "$TMPPATH/$NAMEVER-buildroot" --recompile "$FILE" 2>&1 > build-$NAMEVER.log
+    elif echo "$FILE" | grep -q -i -e "\.tar\.[[:alnum:]]\+$" ; then
+        BNAME=`echo "$FILE" | sed -e 's/\.tar\.[[:alnum:]]\+$//'`
+        NAMEVER="$BNAME" # assume tarball will be name-version.tar.*
+        rpmbuild --buildroot "$TMPPATH/$NAMEVER-buildroot" -tb "$FILE" 2>&1 > build-$NAMEVER.log
+    elif echo "$FILE" | grep -q -i -e "\.spec$" ; then
+        BNAME=`basename "$FILE" .spec`
+        NAMEVER=`rpm -q --qf "%{NAME}-%{VERSION}\n" --specfile "$FILE" | head -n1`
+        rpmbuild --buildroot "$TMPPATH/$NAMEVER-buildroot" -bb "$FILE" 2>&1 > build-$NAMEVER.log
+    fi
+    if [ $? -ne 0 ] ; then
+        echo "RPM BUILD FOR \"$FILE\" FAILED!"
+        return 1
+    fi
+    for pkg in 
+    package_dir "$NAMEVER"
+}
+
+if [ $# -lt 1 ] ; then
+    echo "Usage: $0 SPEC|TARBALL|SRPM [..]"
+    echo "Builds a slackware .tgz package in the current directory."
+    exit 1
+fi
+
+TMPPATH=`rpm --eval "%{_tmppath}"`
+[ -z "$TMPPATH" ] && echo "Error: you must define _tmppath in your .rpmmacros" && exit 1
+CWD="`pwd`"
+
+for file in "$@" ; do
+    build_file "$file"
+done
+

@@ -1,0 +1,148 @@
+#!/usr/bin/perl
+# nzbperl-postnzb v0.1 - performs post-processing on completed nzb's
+# Copyright (C) 2008 Peter Willis <peterwwillis@yahoo.com>
+
+# Handles basic postprocessing, unpacking of files, etc.
+# As of version 0.1, only handles .rar files and deletes .par2 files.
+
+# Special environment variables:
+# NZBP_LASTFILE
+# NZBP_NZBFILE
+# NZBP_DECODEDIR
+# NZBP_NZBDIR
+
+use strict;
+
+# Log to logfile if defined in conf file
+if ( -r "$ENV{HOME}/.nzbperlrc" ) {
+	my $LOGFILE;
+	open(CONF,"$ENV{HOME}/.nzbperlrc");
+	while ( <CONF> ) {
+		if ( /^[^#]?\s*log=(.+)#?/ ) {
+			$LOGFILE = $1;
+			chomp $LOGFILE;
+		}
+	}
+	close(CONF);
+	if ( defined $LOGFILE ) {
+		open(STDOUT, ">>$LOGFILE") || die "Error: could not open log file for writing: $!\n";
+		open(STDERR, ">>&STDOUT") || die "Error: could not dup stderr: $!\n";
+	}
+}
+
+move_to_nzb_dir();
+
+try_unpacking_files();
+
+remove_par2_files();
+
+sub remove_par2_files {
+	print "Removing par2 files ...\n";
+	my $files = listdir(".");
+	unlink( grep(/\.par2$/i, @$files) );
+	# Note: will return 0 if no par2 files exist in dir "."
+}
+
+sub move_to_nzb_dir {
+	print "Moving to nzb dir \"$ENV{NZBP_DECODEDIR}\" ...\n";
+	if ( exists $ENV{NZBP_DECODEDIR} ) {
+		chdir($ENV{NZBP_DECODEDIR}) || die "Error: could not chdir to $ENV{NZBP_DECODEDIR}: $!\n";
+	} else {
+		die "Error: NZBP_DECODEDIR needs to be set!\n";
+	}
+}
+
+sub try_unpacking_files {
+	print "Unpacking files ...\n";
+	my $rars = find_rars(".");
+	foreach my $rar ( @$rars ) {
+		if ( test_rar($rar) ) {
+			if ( unpack_rar($rar) ) {
+				cleanup_rar($rar);
+			} else {
+				print STDERR "Error: failed unpacking rar $rar\n";
+			}
+		}
+	}
+}
+
+sub cleanup_rar {
+	print "Cleaning up rar $_[0] ...\n";
+	my @volumes = map { chomp $_; $_=~s/^Volume\s+//g; $_ } grep(/^Volume\s+/, `rar vt -v "$_[0]" 2>/dev/null`);
+	if ( @volumes < 1 ) {
+		push(@volumes, $_[0]);
+	}
+	my $ret = unlink(@volumes);
+	if ( ! $ret or $ret != @volumes ) {
+		print STDERR "Error: deleted $ret of ".scalar(@volumes)." volumes listed for rar $_[0] (@volumes): $!\n";
+		return(0);
+	}
+	return(1);
+}
+
+sub unpack_rar {
+	print "Unpacking rar $_[0] ...\n";
+	system("rar", "x", "-inul", "-p-", "-y", $_[0]);
+	if ( ($? >> 8) != 0 ) {
+		return(0);
+	}
+	return(1);
+}
+
+sub test_rar {
+	print "Testing rar $_[0] ...\n";
+	system("rar", "t", "-inul", "-p-", $_[0]);
+	if ( ($? >> 8) != 0 ) {
+		return(0);
+	}
+	return(1);
+}
+
+# Non-recursive.
+# Find any "*.rar" files (case-insensitively), find the ones that are
+# 'volume 1' and keep those. The theory is any others will be parts
+# of a multi-volume .rar and we only need the primary ones for now.
+sub find_rars {
+	print "Looking for rar files in \"$_[0]\" ...\n";
+	my @RARS;
+	my @files;
+	my $files = listdir($_[0]);
+	push @files, grep(/\.rar$/i, @$files);
+	push @files, grep(/\.r00$/i, @$files);
+	foreach my $file ( @files ) {
+		print "Checking rar file $file ...\n";
+		my $takefile = 0;
+		my $tmpfile = $file;
+		my $info = `rar lt "$file" 2>&1`;
+		if ( $tmpfile =~ s/\.rar$//ig && -e "$tmpfile.r00" ) {
+			# If this is a .rar file and a .r00 file exists, this rar is definitely the first in a volume series
+			$takefile = 1;
+		} elsif ( $info =~ /volume (\d+)/ ) {
+			# Take any files which are "volume 1", skip others
+			my $volume = $1;
+			if ( $volume eq "1" ) {
+				$takefile = 1;
+			}
+		} else {
+			# There was no .r00 file and no volume identifier, so screw it just take it
+			$takefile = 1;
+		}
+
+		if ( $takefile ) {
+			push(@RARS, $file);
+		}
+	}
+	return(\@RARS);
+}
+
+# Non-recursive
+sub listdir {
+	if ( ! opendir(DIR, $_[0]) ) {
+		print STDERR "Error: couldnt open dir $_[0]: $!\n";
+		return();
+	}
+	my @files = grep(!/^\.\.?$/, readdir(DIR));
+	closedir(DIR);
+	return(\@files);
+}
+

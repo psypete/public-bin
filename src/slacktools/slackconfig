@@ -1,0 +1,73 @@
+#!/bin/sh
+# slackconfig - handle the ./configure part of a slackware package gracefully
+# Copyright (C) 2004-2009  Peter Willis <peterwwillis@yahoo.com>
+
+if [ ! -n "$ARCH" ] ; then
+    if [ `uname -m` = "x86_64" ] ; then
+        ARCH="x86-64"
+        MYCPU="generic"
+    else
+        ARCH="i486"
+        MYCPU="i686"
+    fi
+fi
+
+
+[ -n "${CFLAGS}" ] || CFLAGS="-march=$ARCH -mcpu=$MYCPU -O2"
+[ -n "${CXXFLAGS}" ] || CXXFLAGS="${CFLAGS}"
+
+[ -n "${PREFIX}" ] || PREFIX="/usr"
+[ -n "${SYSCONFDIR}" ] || SYSCONFDIR="/etc"
+[ -n "${LOCALSTATEDIR}" ] || LOCALSTATEDIR="/var"
+[ ! -n "${LIBDIR}" -a "$ARCH" = "x86-64" ] && LIBDIR="$PREFIX/lib64"
+[ ! -n "${LIBDIR}" -a ! "$ARCH" = "x86-64" ] && LIBDIR="$PREFIX/lib"
+[ -n "${LIBDIR}" ] || LIBDIR="$PREFIX/lib"
+
+[ -n "${GCONF_DISABLE_MAKEFILE_SCHEMA_INSTALL}" ] || GCONF_DISABLE_MAKEFILE_SCHEMA_INSTALL=1
+
+if [ ! -e ./configure -a -e Makefile.PL ] ; then
+	export CCFLAGS="$CFLAGS"
+	perl Makefile.PL 2>&1 | tee slackconfig.log
+	exit $?
+fi
+
+if [ ! -e "./configure" -a ! -e "./setup.py" ] ; then
+	echo "Failure: nothing to configure"
+	exit 1
+fi
+[ -e ./configure -a ! -x ./configure ] || chmod 755 ./configure
+
+export CFLAGS
+export CXXFLAGS
+export GCONF_DISABLE_MAKEFILE_SCHEMA_INSTALL
+
+function parseopts() {
+	OPTIONS="prefix sysconfdir confdir localstatedir libdir"
+	./configure --help 2>/dev/null | while read HELP ; do
+		for OPTION in $OPTIONS ; do
+			if echo "$HELP" | grep -e "^--$OPTION=" 2>/dev/null 1>/dev/null ; then
+				if [ "$OPTION" = "prefix" ] ; then
+					echo -n "--prefix=${PREFIX} "
+				elif [ "$OPTION" = "sysconfdir" ] ; then
+					echo -n "--sysconfdir=${SYSCONFDIR} "
+				elif [ "$OPTION" = "confdir" ] ; then
+					echo -n "--confdir=${SYSCONFDIR} "
+				elif [ "$OPTION" = "localstatedir" ] ; then
+					echo -n "--localstatedir=${LOCALSTATEDIR} "
+                elif [ "$OPTION" = "libdir" ] ; then
+                    echo -n "--libdir=${LIBDIR} "
+				fi
+			fi
+		done
+	done
+}
+
+CONFIGUREOPTS="`parseopts`"
+
+# Skip python configure
+if [ -f "setup.py" ] ; then
+    exit 0
+else
+    echo "./configure $CONFIGUREOPTS $@" > slackconfig.log
+    LDFLAGS="-L${LIBDIR}" ./configure $CONFIGUREOPTS "$@" 2>&1 | tee -a slackconfig.log
+fi

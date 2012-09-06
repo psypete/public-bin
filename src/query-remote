@@ -1,0 +1,215 @@
+#!/usr/bin/perl -w
+# query-remote - query things remotely, process them locally
+# Copyright (C) 2009 Peter Willis <pwillis@cbs.com>
+# 
+# So this is a hack to let me quickly build out stat gathering/monitoring
+# for gameday. It's simple in principle:
+# 
+#  1. Connect to a box via SSH and run some commands
+#  2. Collect the output into key-value pairs
+#  3. Process the output using a handler
+# 
+# The commands are run on the remote host by either
+#  1. dumping a small script into a temp file on the remote host & exec it
+#  2. run a command on the command-line
+# 
+# The output from the ssh commands should contain "FOO: BAR" style output
+# and the key/value pairs will be accessible to the handler. If you need to
+# pass more than one line you can use "---START key--", then your output,
+# then "---END key---" and the lines in between will be stored in 'key'.
+# 
+# The config files are perl. The file can do anything really, it just is
+# expected to return a data structure of this form:
+#   { 'section' => 'NAME', 'prefork' => 0, 'hosts' => '',
+#     'hosts_command' => "cat /etc/hosts | awk '{print \$2}'",
+#     'remote_cmd' => 'echo -n "UPTIME:`uptime`"',
+#     'handler' => sub { print "The uptime is ", $o->{'results'}->{'UPTIME'}, "\n" },
+#   }
+# 
+# Valid config options:
+#  * 'prefork'       : if 1, forks before connecting to the host
+#  * 'hosts'         : list of hosts; this or hosts_command is mandatory
+#  * 'hosts_command' : command to run locally to return list of hosts
+#  * 'remote_user'   : user at remote destination (user@HOST)
+#  * 'remote_cmd'    : command to run remotely. you may need to triple-escape
+#                      perl/shell metacharacters here.
+#  * 'remote_script' : same, but a shell script to dump & execute.
+#  * 'ssh_opts'      : options for ssh (overrides defaults)
+#  * 'handler'       : anonymous subroutine or executable to handle output
+#                      from 'remote_*'. if executable, output is passed via
+#                      environment variables.
+
+use strict;
+use IPC::Open2;
+
+use vars qw( @Config );
+my $default_ssh_opts = "-T -o BatchMode=yes -o CheckHostIP=no -o ConnectTimeout=30";
+
+if ( ! @ARGV ) {
+    die "Usage: $0 OPTIONS\nOptions:\n  -f FILE\tConfig file to process.\n  -d DIR\tDirectory of .conf files to process.\n";
+}
+
+my $files = do_opts(\@ARGV);
+main($files);
+
+# Wait for all child processes to exit
+do {
+    $_ = wait();
+} until ( $_ == -1 );
+
+exit(0);
+
+sub main {
+    my $files = shift;
+
+    # Suck your configs into the @Config array
+    # This is quick and dirty.
+    foreach my $file ( @$files ) {
+        print "Adding config $file\n";
+        open(FILE, "<$file") || die "Error: could not read $file: $!\n";
+        my $conf = join('',<FILE>);
+        close(FILE);
+        undef $!;
+        undef $@;
+        $_ = eval $conf;
+        if ( defined $@ and length($@) > 0 ) {
+            die "Eval error: $! ($@)\n";
+        }
+        push( @Config, $_ );
+    }
+
+    foreach my $element ( @Config ) {
+        my $section = $element;
+        my @hosts;
+    
+        # Run a command to get the list of hosts
+        if ( exists $section->{'hosts_command'} ) {
+            @hosts = map { chomp $_ ; $_ } `$section->{hosts_command}`;
+    
+        # Otherwise take an array or a plain whitespace-separated list
+        } elsif ( exists $section->{'hosts'} ) {
+            if ( ref($section->{'hosts'}) eq "ARRAY" ) {
+                @hosts = @{ $section->{'hosts'} };
+            } else {
+                @hosts = split(/\s+/, $section->{'hosts'});
+            }
+        }
+    
+        foreach my $host ( @hosts ) {
+            check_host($host, $section);
+        }
+    }
+}
+
+sub check_host {
+    my $host = shift;
+    my $o = shift;
+    my $pid;
+
+    if ( exists $o->{'prefork'} and $o->{'prefork'} eq "1" or lc $o->{'prefork'} eq "true" or lc $o->{'prefork'} eq "yes" ) {
+        $pid = fork();
+        if ( $pid ) {
+            return();
+        }
+    }
+    
+    $o->{'results'} = collect_data($o, $host);
+
+    # Incase collect_data failed...
+    if ( defined $o->{'results'} ) {
+        if ( ref($o->{'handler'}) eq "CODE" ) {
+            my $h = $o->{'handler'};
+            &$h($o, $host);
+        } elsif ( -x $o->{'handler'} ) {
+            # I am very lazy. Somebody else figure out something better
+            my %oldenv = %ENV;
+            while ( my ($k,$v) = each %{ $o->{'results'} } ) {
+                $ENV{$k} = $v;
+            }
+            system($o->{'handler'});
+            %ENV = %oldenv;
+        }
+    }
+
+    # If we preforked before, we're the child, so exit now
+    if ( defined $pid and $pid == 0 ) {
+        exit(0);
+    }
+}
+
+
+sub collect_data {
+    my $o = shift;
+    my $dest = shift;
+    my $slurp = 0;
+    my ($slurpname, %datahash);
+    my ($OUT, $IN);
+
+    # ' ssh -T [$ssh_opts] [user@]$dest '
+    my $cmd = "ssh -v ";
+    $cmd .= ( exists $o->{'ssh_opts'} ? "$o->{ssh_opts} " : "$default_ssh_opts " );
+    $cmd .= "$o->{remote_user}\@" if exists $o->{'remote_user'};
+    $cmd .= $dest;
+    print "command \"$cmd\"\n";
+    my $pid = open2($IN, $OUT, $cmd) || die "Error: $! ($@)";
+
+    sleep(1);
+    print STDERR "Connected.\n";
+    sleep(5);
+
+    # send a script to execute, or just run a command
+    if ( exists $o->{'remote_script'} ) {
+        my $random_file = "/tmp/query-$$-".time()."-".rand().".exec";
+        # Generate 20 uppercase characters randomly
+        my $random = map { chr(rand(25)+65) } (1..20);
+        my $stuff = "touch $random_file; chmod 700 $random_file; cat > $random_file <<$random;\n";
+        $stuff .= $cmd . "\n";
+        $stuff .= "$random\n/bin/sh -c $random_file\n/bin/rm -f $random_file\n";
+        print STDERR "Writing: \"$stuff\"\n";
+        syswrite($OUT, $stuff);
+    } elsif ( exists $o->{'remote_cmd'} ) {
+        syswrite($OUT, $o->{'remote_cmd'});
+    } else {
+        print STDERR "$0: Error: no remote commands to execute for \"$o->{section}\"\n";
+        return undef;
+    }
+
+    close($OUT);
+
+    while ( <$IN> ) {
+        if ( /^---START (\w+)---\s*$/ and not $slurp ) {
+            $slurpname = $1;
+            $slurp = 1;
+        } elsif ( /^---END (\w+)---\s*$/ and $slurp ) {
+            if ( $slurpname eq $1 ) {
+                $slurp = 0;
+            }
+        } elsif ( $slurp ) {
+            $datahash{$slurpname} .= $_;
+        } elsif ( /^(\w+): (.+)$/ ) {
+            $datahash{$1} = $2;
+            chomp $datahash{$1};
+        }
+    }
+
+    close($IN);
+    # Make sure the child is dead and gone
+    kill(15, $pid);
+    kill(9, $pid);
+
+    return \%datahash;
+}
+
+sub do_opts {
+    my $a = shift;
+    my @files;
+    for (my $i=0; $i<@$a; $i++) {
+        if ( $a->[$i] eq "-d" ) {
+            push @files, glob($a->[++$i]."/*.conf");
+        } elsif ( $a->[$i] eq "-f" ) {
+            push @files, $a->[++$i];
+        }
+    }
+    return \@files;
+}
+
