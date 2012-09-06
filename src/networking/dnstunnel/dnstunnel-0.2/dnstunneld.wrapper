@@ -1,0 +1,25 @@
+#!/bin/sh
+#
+# Configure your DNS tunnel server here
+#
+
+DNSHOST="server.example.com"           # change this to your DNS name
+REPLYIP="127.0.0.1"                    # what to answer on real DNS requests
+#REPLYIP=`ifconfig eth0 | grep "addr:[[:digit:]]\+\.[[:digit:]]\+" | sed -e 's/.*addr:\([[:digit:]]\+\.[[:digit:]]\+\.[[:digit:]]\+\.[[:digit:]]\+\).*/\1/g'` # grab ip from interface; ugly but portable
+OPTIONS=""                             # give additional options here
+
+DNSTUNNELD="/opt/dnstunnel/dnstunneld" # the server script
+
+# --------- no changes below -----------------------
+
+PIDFILE=$1
+shift
+
+if [ $# -gt 0 ] ; then
+    OPTIONS="$OPTIONS $@"
+fi
+
+while [ 1 ] ; do
+    $DNSTUNNELD --pidfile="$PIDFILE" $OPTIONS -i $REPLYIP $DNSHOST >/dev/null 2>&1
+done
+

@@ -1,0 +1,9 @@
+name,fqdn,lan,os,conftag,serial,mac,ip,vlan,offline,nila_hosts_id
+db174,,la,RHEL5.6,,,,,,0,14
+web1006,,la,Solaris5.8,,,,,,0,15
+web0009,,la,RHEL5.6,,,,,,0,18
+db22,,la,RHEL5.6,,,,,,0,19
+web0016,,la,Solaris5.8,,,,,,0,20
+adm9,,la,,,,,,,1,25
+web0110,,la,,,,,,,1,26
+util590,,fl,Solaris5.10,,,,,,0,24

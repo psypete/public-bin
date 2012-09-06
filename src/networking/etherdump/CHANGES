@@ -1,0 +1,43 @@
+EtherDump 2.11
+IPv4 packet sniffer using raw sockets
+
+Changes by Peter Willis since 2.10:
+  * Fix some display inconsistencies
+  * Correct several filtering logic bugs (parentheses match separation not supported yet)
+  * Remove obsolete settings from help output
+
+Changes by Peter Willis since 2.02:
+  * Lots of bugs fixed related to correctly decoding tcp/udp packets
+  * Make everything 32-bit and 64-bit compatible
+  * Do away with the old 'etherdump-format' output, only tcpdump-like output is supported now
+  * Implement ICMP and ARP support
+  * Default to 'eth0' interface
+  * Change '-h' option to '-H', to reserve '-h' for '--help' (why didn't i do that before?)
+  * Rewritten filtering code, should be a little more like pcap-filter(7) now
+
+Changes by Peter Willis since 2.01:
+  * Small local getprotoby* implementation to remove dependency on /etc/protocols
+  * Clean up some of the tcpdump output
+  * Stop outputting 'unsupported IP protocol' by default
+  * Add a '-d' debug flag to prevent recompiling to get more verbose output
+  * Fixed some potential signedness-related bugs with htons/ntohs
+  * Provide reasons in usage for why program failed to run
+  * Fix documentation of size, offset of different packet headers
+  * Add sequence, ack, win and length to output of tcpdump tcp packets
+  * Fix udp length
+
+Changes by Peter Willis since 2.0:
+  * Changed configuration option to reflect new name is
+    "etherdump", not "packetdump". -p is now -e.
+  * Added basic [ipv4] filtering rules.
+  * Improved tcpdump output.
+  * If etherdump was run as a program named tcpdump, defaults
+    to tcpdump-like output.
+  * Added -i to specify interface.
+  * If EtherDump is executed as "tcpdump", tcpdump-like output
+    is the default output type.
+
+Changes by Erik Andersen since 2.0:
+  * Converted to getopt instead of a million strcmps
+  * cleanup
+

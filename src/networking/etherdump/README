@@ -1,0 +1,35 @@
+EtherDump 2.11
+
+EtherDump is a fork by Peter Willis of ipdump2-pre1 (by Christophe Devine)
+with a few small improvements and feature add-ons with the end result being
+able to stream raw frames over a network and eventually convert them into
+pcap format and import into a pcap-reading prog of your choice (I personally
+love Ethereal).
+
+Since version 2.10, the default is to emulate the output and filtering rules
+of tcpdump since this is a very popular tool with similar aims.  Use '-h'
+option to get an idea of how to use the program.
+
+To use this program with a packet analyzer like ethereal/wireshark, just use
+the '-H' option to output raw frames in ASCII hex format and redirect this
+to a file.  Then use `text2pcap hex_dump pcap_file` to create a pcap file
+that your analyzer can read.
+
+Since version 2.10 the filtering syntax is very much like pcap-filter(7) so
+refer to that man page for instructions; example: "etherdump -f 'tcp port
+80'".  Supported protocols are: arp, ip, tcp, udp, icmp.  By default no
+other protocols are displayed on output; to see packets from unknown
+protocols, use '-d'.  Use '-d' multiple times to get deeper levels of
+debugging.  Filtering on link layer addresses is not yet supported.  Use of
+parentheses to separate matches is also not yet supported but should be in
+future versions.
+
+On uClibc the compiled size is ~8kB (and on glibc, 18kB) so this is very
+well suited for embedded systems where you want to debug a network interface
+but don't have room for a whole libpcap+application_layer program.  Instead
+just combine netcat or a CGI script + httpd with EtherDump and read the
+traffic (converted to pcap) on another machine on the network.
+
+License is the GNU General Public License. Read the top of etherdump.c for
+details on your rights under this license and the terms of the license you
+agree to by using the program.

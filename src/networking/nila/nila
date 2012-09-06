@@ -1,0 +1,476 @@
+#!/usr/bin/perl
+# nila v0.1 - network inventory and lookup assistant command-line interface
+# 
+# Copyright (C) 2011-2012 Peter Willis <peterwwillis@yahoo.com>
+#
+
+$|=1;
+use strict;
+use IPC::Open3;
+use Getopt::Std;
+use Data::Dumper;
+use MIME::Base64;
+
+my $UID = $>; # by default work with effective uid, not real uid
+my $USER = getpwuid($UID);
+my @ARGS;
+
+my $QUERY_URL="http://localhost/cgi-bin/nila.cgi";
+my $REMOTE_COMMAND = "ssh";
+my $DISTRIBUTED_CMD = "niladsh";
+my $DISTRIBUTED_OPTS = "-u $USER -n 10 -f %HOSTSFILE%";
+my $NILA_TMPDIR = "/tmp/nila-$USER";
+
+my $VERBOSE = exists $ENV{'VERBOSE'} ? $ENV{'VERBOSE'} : 0;
+
+
+########################################################################
+########################################################################
+
+# Add script's directory to PATH, if it wasn't already in the path
+my $script_path = fullpath($0);
+$ENV{PATH} .= ":$script_path" if (defined $script_path);
+
+my %OPTS;
+getopts('vhqudf:e:odDi:', \%OPTS);
+
+main();
+
+sub main {
+    my @data;
+
+    $VERBOSE=1 if (exists $OPTS{'v'});
+
+    if ( exists $ENV{'http_proxy'} or exists $ENV{'https_proxy'} ) {
+        warn "Warning: detected http[s]_proxy environment variable\n";
+    }
+
+    if ( exists $OPTS{'f'} and $OPTS{'f'} eq "-" ) {
+        @data = map { s/(\r|\n|\r\n)//g; $_ } <STDIN>;
+    } elsif ( exists $OPTS{'f'} and length $OPTS{'f'} ) {
+        open(FILE,"<$OPTS{f}")||die"Error: cannt open file $OPTS{f}: $!";
+        @data = map { s/(\r|\n|\r\n)//g; $_ } <FILE>;
+        close(FILE);
+    } else {
+        @data = @ARGV;
+    }
+
+    if ( exists $OPTS{'i'} and length($OPTS{'i'}) and -r $OPTS{'i'} ) {
+        @data = @{ load_keyvals($OPTS{'i'}) }; # horrible. i know.
+        if ( ! @data ) {
+            print STDERR "$0: Error: did not load any data from the csv file\n";
+        }
+        $OPTS{'u'} = 1;
+    }
+
+    print STDERR "data: " . Dumper(\@data) if $VERBOSE;
+    #exit(0);
+
+    if ( ! @data or exists $OPTS{'h'} ) {
+        usage();
+    }
+
+    my @tmpdata;
+    while ( $_ = shift @data ) {
+        # Figure out the arguments to send along with queries
+        if ( /^--really-delete$/ ) {
+            push(@ARGS, $_);
+        } elsif ( /^--offline$/ ) {
+            push(@ARGS, $_);
+            delete $OPTS{'o'};
+        } else {
+            push(@tmpdata, $_);
+        }
+    }
+    @data = @tmpdata;
+    undef @tmpdata;
+
+    if ( exists $OPTS{'o'} ) {
+        push(@ARGS, "--offline");
+    }
+
+    mk_tmpdir();
+
+    if ( exists $OPTS{'q'} ) {
+        query_hosts( \@data );
+    } elsif ( exists $OPTS{'u'} ) {
+        update_hosts( \@data );
+    } elsif ( exists $OPTS{'d'} ) {
+        delete_hosts( \@data );
+    }
+
+}
+
+# ugh. i know there must be a regex i can use instead of this,
+# but i'm stupid and lazy and it works.
+sub parse_csv {
+    my $aref = shift;
+    my @queries;
+    my @q;
+
+    foreach my $q ( @$aref ) {
+        my @a = split //, $q;
+        my ($quot,$s) = (0,0);
+        my @r;
+
+        my $i;
+        for ( $i=0; $i<@a; $i++ ) {
+            if ( $a[$i] eq '"' ) {
+                if ( $a[$i-1] ne "\\" && ! $quot ) {
+                    $quot++;
+                    next
+                } elsif ( $a[$i-1] ne "\\" && $quot ) {
+                    $quot--;
+                    next 
+                }
+            }
+            if ( $a[$i] eq "," && ! $quot ) {
+                push(@r, join('', @a[$s..$i-1]));
+                $s=$i+1;
+            }
+        }
+        push(@r, join('', @a[$s..$i])) if ($s != @a);
+
+        push(@q, \@r);
+    }
+
+    return \@q;
+}
+
+sub mk_tmpdir {
+    if ( ! -d $NILA_TMPDIR ) {
+        mkdir($NILA_TMPDIR, 0700) || die "Error: could not make \"$NILA_TMPDIR\": $!";
+    }
+    if ( ! -w $NILA_TMPDIR ) {
+        die "Error: can not write to \"$NILA_TMPDIR\": $!";
+    }
+}
+
+sub query_hosts {
+    my $argv = shift;
+    my %q;
+    my @distrib;
+
+    my $query = do_query( operation => "get",
+        type => "hosts",
+        query => {
+            data_type => "csv",
+            query => join( "\000", @$argv ),
+            args => [ @ARGS ]
+        }
+    );
+
+    if ( !defined $query ) {
+        die "Error: query returned undefined\n";
+    }
+
+    my $csv = parse_csv($query->{'output'});
+
+    my @fields = @{ shift @$csv };
+    my %fields = map { $fields[$_] => $_ } 0..$#fields;
+
+    if ( @$csv < 1 ) {
+        die "Error: no query results\n";
+    }
+
+    print STDERR "$0: Query results:\n" if $VERBOSE;
+
+    print join(",", @fields), "\n";
+
+    foreach my $line ( @$csv ) {
+        print join(",", @$line), "\n";
+
+        if ( length $OPTS{'e'} ) {
+            if ( exists $OPTS{'D'} ) {
+                # @line changes in this loop so copy it each time
+                push(@distrib, $line);
+            } else {
+                execute_command(\%fields, $line, $OPTS{'e'});
+            }
+        }
+    }
+
+    if ( @distrib ) {
+        execute_distributed(\%fields, \@distrib, $OPTS{'e'});
+    }
+}
+
+sub execute_distributed {
+    my $fields = shift;
+    my $entries = shift;
+    my $command = shift;
+
+    open(my $fd, ">$NILA_TMPDIR/nodes-$$.txt") || die "Error: could not make tmp file \"$NILA_TMPDIR/nodes-$$.txt\": $!";
+
+    foreach my $entry (@$entries) {
+        foreach my $key (qw( fqdn name )) {
+            if ( exists $entry->[ $fields->{$key} ] and length $entry->[ $fields->{$key} ] ) {
+                print $fd $entry->[ $fields->{$key} ] . "\n";
+                last;
+            }
+        }
+    }
+
+    close($fd);
+
+    my $cmd = "$DISTRIBUTED_CMD $DISTRIBUTED_OPTS";
+
+    $cmd =~ s/%USER%/$USER/g;
+    $cmd =~ s/%HOSTSFILE%/\"$NILA_TMPDIR\/nodes-$$.txt\"/g;
+    $cmd .= " " . quotemeta($command);
+
+    print STDERR "$0: Running \"$cmd\"\n" if $VERBOSE;
+
+    system($cmd);
+    my $r = ($? >> 8);
+
+    unlink("$NILA_TMPDIR/nodes-$$.txt");
+
+    return $r;
+
+}
+
+# NOTE to self: parallelize this
+sub execute_command {
+    my $h = shift;
+    my $l = shift;
+    my $command = shift;
+    my $cmd = "$REMOTE_COMMAND";
+
+    # try to use fqdn if available
+    if ( exists $l->[ $h->{'fqdn'} ] and length $l->[ $h->{'fqdn'} ] > 0 ) {
+        $cmd .= " " . $l->[$h->{'fqdn'}];
+    } else {
+        $cmd .= " " . $l->[$h->{'name'}];
+    }
+    $cmd .= " \"" . quotemeta($command) . "\"";
+
+    print STDERR "$0: Running \"$cmd\"\n" if $VERBOSE;
+    system($cmd);
+}
+
+sub update_hosts {
+    my $data = shift;
+
+    # ensure @data is made up of comma-separates k=v pairs, with unique 'name'
+    my %names;
+    my @update_buf;
+    my $odata = parse_csv($data);
+
+    print STDERR "odata " . Dumper($odata) if $VERBOSE;
+
+    foreach my $row ( @$odata ) {
+        %names = ();
+        my %pairs = map { split(/=/,$_,2) } @$row;
+
+        map {
+            if ( lc $_ eq "name" and !exists $names{lc $_} ) {
+                $names{$_} = $pairs{$_};
+            }
+        } keys %pairs;
+
+        push(@update_buf, \%pairs);
+
+        if ( keys %names < 1 ) {
+            error("update requires a 'name' key/val pair for each update");
+        }
+    }
+
+    my @updates = map { my $u=$_; join("\000", map { "$_=$u->{$_}" } keys %$u) } @update_buf;
+
+    my $result = do_query( operation => "update",
+        type => "hosts",
+        query => {
+            data_type => "csv",
+            query => \@updates,
+            args => undef
+        }
+    );
+
+    #print "Result: " . Dumper(\@result) . "\n";
+    print join("\n", @{ $result->{'output'} }), "\n";
+
+}
+
+sub delete_hosts {
+    my $argv = shift;
+    my %q;
+
+    print STDERR "argv " . Dumper($argv) if $VERBOSE;
+
+
+    my $query = do_query( operation => "delete",
+        type => "hosts",
+        query => {
+            data_type => "csv",
+            query => join("\000",@$argv),
+            args => [ @ARGS ]
+        }
+    );
+
+    print join("\n", @{$query->{'output'}}), "\n";
+}
+
+sub do_query {
+    # %a = ( operation => 'get|post', type => 'hosts', query => {data_type=>"list|json",query="",args=>[]} )
+    my %a = @_;
+    my $self = {};
+
+    # Set query defaults
+    if ( !defined $a{'operation'} ) {
+        $a{'operation'} = "get";
+    }
+    if ( !defined $a{'type'} ) {
+        $a{'type'} = "hosts";
+    }
+    if ( !defined $a{'query'} ) {
+        error("no query passed to do_query()");
+    } else {
+        if ( !defined $a{'query'}->{'data_type'} ) {
+            $a{'query'}->{'data_type'} = "csv";
+        }
+        if ( !defined $a{'query'}->{'query'} ) {
+            error("no args supplied for 'query'");
+        }
+        #if ( !defined $a{'query'}->{'args'} ) {
+        #   
+        #}
+    }
+
+    my $query = join("&", (
+        "op=".encode_string($a{operation}),
+        "t=".encode_string($a{type}),
+        "q-dt=".encode_string($a{'query'}->{'data_type'})
+        )
+    );
+
+    foreach my $dn ( ("query", "args") ) {
+        if ( ref($a{'query'}->{$dn}) eq "ARRAY" ) {
+            foreach my $ar ( @{ $a{'query'}->{$dn} } ) {
+                $query .= "&q-$dn=".encode_string($ar);
+            }
+        } else {
+            $query .= "&q-$dn=".encode_string($a{'query'}->{$dn});
+        }
+    }
+
+    print STDERR "$0: query: $query\n" if $VERBOSE;
+
+    #my $cmd = "wget -q -S -O - \"$QUERY_URL?$query\"";
+    my $cmd = "curl -si -d \@- \"$QUERY_URL\" 2>&1";
+    #my $pid = open2(my $pipe_read, my $pipe_write, $cmd);
+    my $pid = open3(my $pipe_write, my $pipe_read, undef, $cmd);
+
+    print $pipe_write $query . "\n";
+    close($pipe_write) if ($pipe_write);
+
+    my $output = join("", <$pipe_read>);
+    close($pipe_read) if ($pipe_read);
+
+    waitpid($pid, 0);
+
+    if ( ($? >> 8) != 0 ) {
+        error("query failed: $output");
+    }
+
+    # yeah, this is horrible. meh
+    $output =~ s/\r\n/\n/g;
+
+    # i'll probably do something with this eventually
+    my $headers;
+    if ( $output =~ s/^(.+?\n\n)//s ) {
+        $headers = $1;
+    }
+
+    $self->{'headers'} = [ split(/\n/, $headers) ];
+
+    if ( $a{'query'}->{'data_type'} eq "csv" ) {
+        $self->{'output'} = [ split(/(?:\r\n|\n)/, $output) ];
+    } else {
+        $self->{'output'} = [ $output ];
+    }
+
+    print STDERR "$0: do_query result: " . Dumper($self) if $VERBOSE;
+
+    return $self;
+}
+
+sub load_keyvals {
+    my $file = shift;
+    my @csv;
+
+    open(F, "<$file") || die "Error: could not open csv file $file: $!\n";
+    my @file = map { s/(\r\n|\r|\n)//g; $_ } <F>;
+    close(F);
+
+    my $csv = parse_csv(\@file);
+    my @headers = @{ shift @$csv };
+
+    foreach my $row (@$csv) {
+        my $d;
+        for ( my $i=0; $i<@headers; $i++ ) {
+            if (!exists $row->[$i] or length $row->[$i] < 1 ) {
+                next;
+            # skip nila-specific values which might be unique
+            } elsif ( $headers[$i] =~ /^nila_(.+)_id$/ ) {
+                next;
+            }
+            $d .= "," if (defined $d);
+            $d .= "$headers[$i]=$row->[$i]";
+        }
+        push(@csv, $d);
+    }
+
+    return \@csv;
+}
+
+
+sub error {
+    die "Error: $_[0]";
+}
+
+sub encode_string {
+    my $oldstr = $_[0];
+    $oldstr =~ s/([^A-Za-z0-9])/sprintf("%%%02X", ord($1))/seg;
+    return $oldstr;
+}
+
+sub decode_string {
+    my $oldstr = $_[0];
+    $oldstr =~ s/\%([A-Fa-f0-9]{2})/pack('C', hex($1))/seg;
+    return $oldstr;
+}
+
+sub fullpath {
+    chomp(my $pwd = `pwd`);
+    if ( $_[0] =~ /^(.+)\/[^\/]+$/ ) {
+        my $dir=$1;
+        return "$pwd/$dir" if ( $dir !~ /^\// );
+        return $dir;
+    }
+    return;
+}
+
+sub usage {
+    print STDERR <<EOUSAGE;
+Usage: $0 [OPTIONS] QUERY [..]
+  -v           Verbose output
+  -q           List hosts matching QUERY
+  -u           Add or update records using QUERY
+  -i FILE      Import a .csv-format FILE to the database
+  -d           Delete records using QUERY
+  -f FILE      Get queries out of FILE instead of as arguments
+  -e EXEC      Execute EXEC on each host matched using '-q'
+  -o           Show offline hosts when using '-q'
+  -D           With -e, distribute execution across multiple hosts at once
+                 (distributed options: $DISTRIBUTED_OPTS)
+  -h           What you're seeing right now (unless you're blind)
+EOUSAGE
+    exit(1);
+}
+
+
+##### 
+# special:   # ; ;; " ' \ ` ! * $ ( ) > < & | 
+# not special:   ~ @ % ^ - _ + = [ ] { } : , . / ?
+

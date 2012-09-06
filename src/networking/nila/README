@@ -1,0 +1,143 @@
+
+            NILA - Network Inventory and Lookup Assistant
+
+ABOUT
+
+    nila is a set of tools to create a minimal network inventory database.
+    Scripts are provided to query the database for automation purposes.
+
+    The stock database that ships with nila provides enough detail about a
+    host to automate most parts of a LAMP network from kickstart to software
+    installation and configuration. 
+
+REQUIREMENTS
+
+    nila requires a MySQL database server, a web server with CGI support and
+    a Perl interpreter.  The system has only been tested on Linux but other
+    platforms may work as well.  The command-line client uses 'curl' to
+    fetch data from the CGI script because i'm lazy.
+
+INSTALLATION
+
+    Copy the 'nila.cgi' script to the cgi-bin directory of your web server
+    and set it up to be executed as a cgi script.  Edit the file to include
+    your database server information, and change $DB_CREDS_FILE to point to
+    a file with the username and password to the database on separate lines.
+
+    Put the full URL path to 'nila.cgi' in the 'nila' script. Copy 'nila' to
+    wherever your heart desires - /usr/local/bin should work.
+
+    Run the 'nila_setup_db.pl' script with the host, port, username and
+    password of your database as arguments.  This will create the database
+    and verify it is set up correctly.  It should be safe to re-run at any
+    time.
+
+CLIENT USAGE - nila
+
+    A Query is made up of 'KEY=VALUE' pairs separated by commas. If you need
+    to include commas in a VALUE it should be preceeded by a backspace (from
+    the shell this would require two backspaces).  You can use '=', '!=' or
+    ' like ' in between the KEY and VALUE to test if a KEY is, isn't, or is
+    like a VALUE.
+    
+    To populate the database use the '-u' option and at least a 'name'
+    key/value pair. As of this writing all database records must have a
+    unique 'name' entry.
+    
+    To query the records you've created use '-q'. You can use any key/value
+    pair for these queries. To see all records (including ones marked
+    'offline') use in combination with '-o'. You can put each query on a new
+    line of a file and pass it with '-f' if you don't want to pass them on
+    the command line.
+    
+    To delete entries use the '-d' option. If you pass only a 'name'
+    key/value pair, the entire record will be deleted.  If you
+    specify another key/value pair in addition to the name, only the
+    non-'name' pairs will be deleted. Using '-o' will allow you to delete
+    offline hosts.
+
+    Keep in mind that deleting records is probably a bad idea.  It's better
+    that you have stale old records you can refer to later to keep track of
+    where things used to be assigned.  If you don't want a record to show up
+    in your query, update the record with 'offline=1'.  This will mark it as
+    offline and it will not show up in queries until you pass the '-o'
+    argument.  If you really need to delete a record, use the '-d' option
+    and pass the "--really-delete" argument.
+
+    To import lots of records at once use the '-i' command. This just
+    performs an update for reach row with each non-empty column, excluding
+    column names matching 'nila_*_id'.
+
+    You can use the '*' character as a wild card in queries. For example, to
+    look for all hosts starting with 'clt', use 'nila -u name=clt*'.
+
+    Examples:
+
+      $ nila -u name=web1234,fqdn=web1234.dc.site.com,lan=dc,ip=1.2.3.4,os=RHEL5,conftag=QA,mac=00:11:22:33:44:55,vlan=201
+      $ nila -u name=web234,lan=dc,ip=1.2.3.4,os=Solaris5.9
+      $ nila -q lan=dc,os=Solaris5.9
+      $ nila -u name=web234,offline=1
+      $ nila -d name=web234,ip=1.2.3.4
+      $ nila -q 'name=*,os!=RHEL5.6'
+
+CLIENT USAGE - niladsh
+
+    niladsh is a minimal interface for executing commands in parallel. It is
+    invoked by nila when you use the '-e' and '-D' options together. It will
+    take the query results and look for first 'fqdn', then 'name' and run
+    the '-e' command on each entry it finds first.
+
+    It's still very alpha-quality code and some features may not work (or
+    aren't very useful) so you can edit the source to 'nila' to specify a
+    different distributed app to run commands with. By default any instance
+    of '%USER%' or '%HOSTSFILE%' found in the $DISTRIBUTED_CMD or
+    $DISTRIBUTED_OPTS variables will be replaced with the current process's
+    user name and a file with the fqdn/name on each new line, respectively.
+
+    Example:
+
+      $ niladsh -u $USER -n 10 -f hostlist.txt ls
+
+BACKEND USAGE - nila.cgi
+
+    The backend was not originally intended to be interfaced with directly. 
+    However, you may use standard CGI queries (REST at a later date) to get
+    records and set information.
+
+    API parameters:
+
+      * 'op' - 'get', 'update', 'delete'
+        Specifies which action the backend should take.
+
+      * 't' - 'hosts'
+        You can consider this the 'noun' for the previous 'verb' (op); what
+        type of database element we are operating on. Currently only 'hosts'
+        is supported.
+
+      * 'q-query' - QUERY
+        The query to perform a given operation on. If the query starts with
+        "base64:" the rest of the string will be considered a base64-encoded
+	string and decoded.
+
+      * 'q-rec' - record name(s)
+        This optional value allows you to select specific records to return
+        with a query. This defaults to '*' (return all records).
+
+      * 'q-dt' - 'csv'
+        Specifies the data type of the returned records. Currently only
+        'csv' is supported, which returns records in comma-separated format
+        with each record on a new line.
+
+      * 'q-args' - arguments
+        Optional arguments to a given operation. Currently only used by the
+        delete function; if 'reallydelete=1' is not passed, nothing gets
+        deleted.
+
+DATABASE
+    
+    The database by default has one main table ('Hosts') and a limited set
+    of column names.  To expand the column names, edit the
+    'nila_setup_db.pl' script to include new column names, then edit the
+    'nila.cgi' script to add the column names in the same order to the
+    %TABLE_FIELDS hash.
+

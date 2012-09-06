@@ -1,0 +1,153 @@
+#!/bin/bash
+# wrapssh - handle ssh differently depending on the target
+
+SSHPASS="sshpass"
+SSHPASS_FILE="$HOME/.sshpass"
+SSHPASS_OPTS="-f $SSHPASS_FILE"
+
+SSH="ssh"
+SSH_OPTS="-q"
+# If you don't care about the security of your SSH keys ... the only reason this would be needed
+# would be if your host keys change constantly and you want to ignore if they are wrong. It will
+# also prevent from writing new host keys.
+#SSH_OPTS="-q -o CheckHostIP=no -o StrictHostKeyChecking=no"
+
+########################################################################################
+
+MYDIR=`echo $0|sed -ne 's;^\(.*\)\/\([^\/]\+\)$;\1;p'`
+
+function runssh() {
+    local jump="$1"
+    shift
+    local host="$1"
+    shift
+    local cmds="$@"
+
+    # because of how we pass stuff to ssh below to get expect to understand when it's
+    # done parsing options, we need to execute something, so tell it to execute bash
+    if [ $# -lt 1 -o -z "$cmds" ] ; then
+        cmds="bash -l"
+    fi
+    echo "cmds \"$cmds\""
+
+    # Don't ask me why but on Cygwin shells I have to use the full path to expect or it
+    # starts segfaulting.
+    # Also need the 'true' at the beginning or the 'echo' to create the expect file fails.
+    # Also, if we pass "df -h ; sleep 2" to expect, expect wraps the ";" with curly braces
+    # and I can't figure out how to stop that, so I have to write the commands to a file
+    # before expect includes it in the spawn line. Sucky.
+
+    if [ "$jump" = "-" ] ; then
+        #/bin/bash -c "true ; echo \"$@\" > /tmp/tmpssh-\$USER.cm ; echo \"set pas [lindex \\\$argv 0] ; set host [lindex \\\$argv 1] ; set file [open /tmp/tmpssh-\$USER.cm r] ; gets \\\$file buf; close \\\$file ; spawn $SSH $SSH_OPTS \\\$host \"\\\$buf\" ; for {} 1 {} { expect \\\"assword\\\" { send \\\"\\\$pas\r\\\" } \\\"sure you want to continue connecting\\\" { send \\\"yes\r\\\" } \\\"\\\\\\\\\$\\\" { break } timeout { send_user \\\"connection timed out\n\\\" ; exit } eof { exit } ; } ; interact\" > /tmp/tmpssh-\$USER.ex ; /usr/bin/expect -f /tmp/tmpssh-\$USER.ex \"\$@\"" -- "`cat $SSHPASS_FILE`" "$host"
+        #/bin/bash -c "true ; echo \"set pas [lindex \\\$argv 0] ; set host [lindex \\\$argv 1] ; set runit [lindex \\\$argv 2] ; spawn $SSH $SSH_OPTS \\\$host \\\"$@\\\" ; for {} 1 {} { expect \\\"assword\\\" { send \\\"\\\$pas\r\\\" } \\\"sure you want to continue connecting\\\" { send \\\"yes\r\\\" } \\\"\\\\\\\\\$\\\" { break } timeout { send_user \\\"connection timed out\n\\\" ; exit } eof { exit } ; } ; interact\" > /tmp/tmpssh-\$USER.ex ; /usr/bin/expect -d -f /tmp/tmpssh-\$USER.ex \"\$@\"" -- "`cat $SSHPASS_FILE`" "$host" $RUNCMD
+        /bin/bash -c "true ; echo \"set pas [lindex \\\$argv 0] ; set host [lindex \\\$argv 1] ; set runit [lindex \\\$argv 2] ; spawn $SSH $SSH_OPTS \\\$host \\\"echo expect is ready to interact ; $cmds\\\" ; for {} 1 {} { expect \\\"assword\\\" { send \\\"\\\$pas\r\\\" } \\\"sure you want to continue connecting\\\" { send \\\"yes\r\\\" } \\\"expect is ready to interact\\\r\\\n\\\" { break } \\\"\\\\\\\\\$\\\" { break } timeout { send_user \\\"connection timed out\n\\\" ; exit } eof { exit } ; } ; interact eof { return } \" > /tmp/tmpssh-\$USER.ex ; /usr/bin/expect -f /tmp/tmpssh-\$USER.ex \"\$@\"" -- "`cat $SSHPASS_FILE`" "$host" $RUNCMD
+        exit $?
+    else
+        $SSHPASS $SSHPASS_OPTS ssh $SSH_OPTS -t "$jump" /bin/bash -c 'true ; echo "send_user \"argv is \\\"\$argv\\\"\n\" ; set pas [lindex \$argv 0] ; set host [lindex \$argv 1] ; spawn ssh -a -o PubkeyAuthentication=no -o CheckHostIP=no -o StrictHostKeyChecking=no \$host [lrange \$argv 2 \$argc] ; for {} 1 {} { expect \"assword\" { send \"\$pas\r\" } \"sure you want to continue connecting\" { send \"yes\r\" } \"\\\\\$\" { break } timeout { send_user \"connection timed out\n\" ; exit } eof { send_user \"end of file\n\" ; exit } ; } ; interact" > /tmp/tmpssh-$USER.ex ; /usr/bin/expect -f /tmp/tmpssh-$USER.ex "$@"' "`cat $SSHPASS_FILE`" "$host"
+        exit $?
+    fi
+
+}
+
+
+function wrap_ssh() {
+    local HOST="$1"
+    shift
+
+    # Try to resolve the "real" fqdn if $HOST was a cname for example
+    local DNSRESOLV=`dig +short "$HOST" | grep -v -e "^[0-9]\+\.[0-9]\+\.[0-9]\+\.[0-9]\+$" | tail -1`
+    if [ -n "$DNSRESOLV" ] ; then
+        HOST="$DNSRESOLV"
+    fi
+
+    case "$HOST" in 
+        # Use jump server for plano/charlotte servers
+        pln*|clt*)
+            #exec $SSHPASS $SSHPASS_OPTS ssh $SSH_OPTS -t 150.123.72.91 ssh $SSH_OPTS "$HOST" "$@"
+            runssh "150.123.72.91" "$HOST" "$@"
+            ;;
+
+        # Use jump server for NY4/KWA servers
+        ny4*|kwa*)
+            #exec $SSHPASS $SSHPASS_OPTS ssh $SSH_OPTS -t kwalxutilp015.finra.org ssh $SSH_OPTS "$HOST" "$@"
+            runssh "kwalxutilp015.finra.org" "$HOST" "$@"
+            ;;
+
+        # Just SSH straight to the machine
+        *)
+            runssh "-" "$HOST" "$@"
+    esac
+}
+
+function wrap_scp() {
+    local JUMPSVR
+    local CMD
+    local LASTOPT
+
+    for arg in "$@" ; do
+        case "$arg" in
+            # Use jump server for plano/charlotte servers
+            pln*|clt*)
+                JUMPSVR="150.123.72.91"
+                LASTOPT="$arg"
+                ;;
+
+            # Use jump server for NY4/KWA servers
+            ny4*|kwa*)
+                JUMPSVR="kwalxutilp015.finra.org"
+                LASTOPT="$arg"
+                ;;
+
+            # Catch when 'scp' command options begin
+            scp*)
+                CMD="$arg"
+                ;;
+
+            # Deal with other args
+            *)
+                if [ ! -n "$CMD" ] ; then
+                    LASTOPT="$arg"
+                elif [ -n "$CMD" ] ; then
+                    CMD="$CMD $arg"
+                fi
+                ;;
+        esac
+    done
+
+    if [ -n "$JUMPSVR" -a -n "$LASTOPT" ] ; then
+        exec $SSHPASS $SSHPASS_OPTS ssh $SSH_OPTS -t $JUMPSVR ssh $SSH_OPTS -t "$LASTOPT" "$CMD"
+    else
+        exec $SSHPASS $SSHPASS_OPTS ssh $SSH_OPTS -t "$LASTOPT" "$CMD"
+    fi
+}
+
+######################################################################################################
+
+if echo "$0" | grep "wrapscp$" >/dev/null ; then
+
+    if [ -n "$RUNNING_WRAPSCP" ] ; then
+        wrap_scp "$@"
+        exit $?
+    else
+        if [ $# -lt 2 ] ; then
+            exec scp
+            exit $?
+        fi
+        export RUNNING_WRAPSCP=1
+        scp -S $MYDIR/wrapscp "$@"
+        exit $?
+    fi
+
+else
+
+    if [ $# -lt 1 ] ; then
+        echo "Usage: $0 HOST [COMMAND ..]"
+        exit 1
+    fi
+    wrap_ssh "$@"
+    exit $?
+
+fi
+
+
+exit 1

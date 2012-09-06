@@ -1,0 +1,779 @@
+
+$report = "high-priority";
+
+$data_dir = "unix_group";
+$exclusions_file = "exclusions";
+
+#
+# Format
+#
+
+# 0=html 1=text  2=tab-separated  3=comma-separated 4=html w/o frames 5=simple html (no png images)
+# 6=PDF  7=XML
+$format = "0";
+
+#
+# Header
+#
+
+# First paragraph of the report.
+$introduction = "On %date%, at %time%, a %level% %type% was conducted using the %scanner%. The scan discovered a total of %hosts%, and detected %reds%.";
+
+$report_title = "SAINTwriter Assessment Report";
+$asv_identity = "";
+$customer_identity = "";
+
+# PDF/DAT file containing an image to include in pdf reports.
+# Must be located in html/reporting/saintwriter/headers/pdfs
+$header_pdf = "";
+
+# Image file to include in HTML reports.
+# Must be located in html/reporting/saintwriter/headers/images
+$header_img = "...";
+
+# off=use default headers; on=use header provided above; reverse=no header.
+$diffheader = "off";
+
+# show your logo
+$logo = "off";
+
+# only for report formats that do not have png images
+$show_title = "on";
+
+# shows scan time in intro paragraph for HTML-based and text formats;
+# shows scan date/time in other formats or if show_intro is off
+$show_scan_time = "on";
+
+# for HTML-based and text formats, show report date; otherwise show date/time
+$show_report_time = "on";
+
+$show_scan_level = "on";
+$show_scanner_version = "off";
+$show_session = "off";
+
+# Where to find the logo; can be URL or full file path
+# Only URL is valid for Simple HTML format (no png images)
+$logo_path = "http://www.saintcorporation.com/images/saint_logo.jpg";
+
+#Whether to show the Introduction paragraph (includes scan date)
+$show_intro = "on";
+
+#Whether to describe the vulnerability severities e.g. "Critical Problems"
+$show_vuln_severity_desc = "off";
+
+#Whether to describe the vulnerability status definitions e.g., New,
+#Removed, Preexisting, Reintroduced for trend analysis
+$show_vuln_status_desc = "off";
+
+#Whether to describe what the defined classes are
+$show_class_desc = "off";
+
+#
+# Charts
+#
+
+# Which charts to include
+
+# Status of all vulnerabilities by severity level
+$bar_vulnstatus = "off";
+$table_vulnstatus = "off";
+$vs_title = "Vulnerability Status by Severity";
+# Whether to invert placement of status and severity
+$vs_invert = "off";
+
+# Vulnerabilities by severity level
+$pie_vulns = "off";
+$bar_vulns = "off";
+$table_vulns = "off";
+$greenexclude_vulns = "off";
+$v_title = "Vulnerabilities by Severity";
+
+# Hosts by severity level
+$pie_hosts = "off";
+$bar_hosts = "off";
+$table_hosts = "off";
+$h_title = "Hosts by Severity";
+
+# The number of vulnerabilities in each class
+$pie_classes = "off";
+$bar_classes = "off";
+$table_classes = "off";
+$cl_title = "Vulnerabilities by Class";
+
+# The number of hosts in each category
+$bar_categories = "off";
+$table_categories = "off";
+$c_title = "Hosts per Vulnerability Category";
+
+# Vulnerabilities by severity and subnet
+$bar_subvulns = "off";
+$table_subvulns = "off";
+$sv_title = "Vulnerabilities by Subnet";
+
+# Hosts by severity and subnet
+$bar_subhosts = "off";
+$table_subhosts = "off";
+$sh_title = "Hosts by Subnet";
+
+# Vulnerabilities in each class by subnet
+$bar_subclasses = "off";
+$table_subclasses = "off";
+$scl_title = "Vulnerabilities per Class by Subnet";
+
+# Hosts in each category by subnet
+$bar_subcategories = "off";
+$table_subcategories = "off";
+$sc_title = "Hosts per Vulnerability Category by Subnet";
+
+# Assign names to each subnet
+$name_subnets = "off";
+$subnet_count = "7";
+
+# Begin subnets (do not remove this line)
+# End subnets (do not remove this line)
+
+# The most vulnerable hosts, and how many vulnerabilities affect each
+$bar_tophosts = "off";
+$table_tophosts = "off";
+$top_hosts_title = "Top %n% Vulnerable Hosts";
+# Sort key for determining the most vulnerable hosts
+# 5 = severity
+# 15 = total vulnerabilities
+$top_hosts_key = "15";
+# Max. 20 for bar graphs based on total vulnerabilities
+# Max. 5 for bar graphs based on severity
+$top_hosts_count = "10";
+
+# The most common vulnerabilities, and how many hosts are affected by each
+$bar_topvulns = "off";
+$table_topvulns = "off";
+$top_vulns_title = "Top %n% Vulnerabilities";
+# Max. 20 for bar graphs
+$top_vulns_count = "10";
+
+# The most common services, and how many hosts are running each
+$bar_topservices = "off";
+$table_topservices = "off";
+$top_services_title = "Top %n% Services";
+# Max. 20 for bar graphs
+$top_services_count = "10";
+
+# Status of all vulnerabilities
+$bar_allvulnstatus = "off";
+$table_allvulnstatus = "off";
+$avs_title = "Status of All Vulnerabilities";
+
+# Status of current vulnerabilities
+$pie_curvulnstatus = "off";
+$bar_curvulnstatus = "off";
+$table_curvulnstatus = "off";
+$cvs_title = "Status of Current Vulnerabilities";
+
+# Status of old vulnerabilities
+$pie_lastvulnstatus = "off";
+$bar_lastvulnstatus = "off";
+$table_lastvulnstatus = "off";
+$lvs_title = "Status of Old Vulnerabilities";
+
+# Vulnerabilities by severity level and date
+$bar_vulnhistory = "off";
+$table_vulnhistory = "off";
+$vh_title = "Vulnerability History";
+
+# Hosts by severity level and date
+$bar_hosthistory = "off";
+#$table_hosthistory = "on";
+$table_hosthistory = "off";
+$hh_title = "Host History";
+
+# Vulnerability classes by severity level and date
+$bar_classhistory = "off";
+$table_classhistory = "off";
+$clh_title = "History of Vulnerabilities by Class";
+
+# Vulnerability categories by severity level and date
+$bar_cathistory = "off";
+$table_cathistory = "off";
+$ch_title = "History of Hosts by Category";
+
+# Black and white output
+$blackandwhite = "off";
+
+# Whether to place values beside bars in bar graphs
+$bar_values = "on";
+
+# Axis labels for history charts.
+# 0=Month-Day-Year, 1=Month-Day, 2=Month-Year, 3=ordinal
+# 4=dataset
+$history_label = "0";
+
+# In total status charts, whether to count only reds
+# ("on"), all vulnerabilities ("off"), or only reds
+# and yellows ("reverse")
+$vulnstatus_redonly = "on";
+
+# Whether to print a warning message about the variable
+# above
+$redonly_msg = "off";
+
+#
+# Lists
+#
+
+# which lists to include
+$host_list = "on";
+$vuln_list = "on";
+$pci_special_lists = "off";
+$pci_attestation = "off";
+$showscopediscrep = "off";
+
+# show pci severity level
+$showpciseverity = "off";
+
+# Host list title
+$hl_title = "Host List";
+# Vulnerability list title
+$vl_title = "Vulnerability List";
+# Vulnerability Summary list title
+$vl_s_title = "Vulnerability Summary List";
+
+# 0=none
+# 1=hostname
+# 2=nbname
+# 3=ip
+# 4=os
+# 5=reds
+# 6=yellows
+# 7=browns
+# 8=greens
+# 9=top-10s
+# 10=severity
+# 11=text
+# 12=category (tutorial name)
+# 13=cve
+# 14=topten
+# 15=scan time
+# 16=status
+# 17=recurrences
+# 18=current recurrences
+# 19=status/severity cross-reference
+# 20=iava
+# 21=other index
+# 22=class
+# 23=authentication success/failure
+# 24=confirmed/inferred
+# 25=vulnerability ID
+# 26=service
+# 27=SAINT node name
+# 28=blues
+# 29=successful exploits
+# 30=unsuccessful exploits
+# 31=BID
+# 32=OSVDB
+# 33=MAC address
+# 34=Exploit available
+# 35=CVSS base score
+# 36=CVSS base vector
+# 37=PCI vulnerability score
+# 38=PCI host score
+# 39=Nessus script ID
+# 40=CPE
+# 41=hasexploitnum
+# 42=excluded comments
+# 43=excluded?
+# 44=port
+# 45=PCI Failure Reason
+# 46=Reference IDs
+# 47=Microsoft ID
+# 48=PCI Severity
+
+# which columns to include in host list (1-9,15-19,23,27-30,33,38,41)
+$host_list_1 = "1";
+$host_list_2 = "2";
+$host_list_3 = "3";
+$host_list_4 = "4";
+$host_list_5 = "5";
+$host_list_6 = "0";
+$host_list_7 = "0";
+$host_list_8 = "0";
+$host_list_9 = "0";
+$host_list_10 = "0";
+$host_list_11 = "0";
+$host_list_12 = "0";
+$host_list_13 = "0";
+$host_list_14 = "0";
+$host_list_15 = "0";
+
+# which columns to include in vulnerability
+# list (1-4, 10-14, 16-18, 20-22, 24-27, 31-37, 39, 40, 42, 43, 45, 48)
+$vuln_list_1 = "1";
+$vuln_list_2 = "10";
+$vuln_list_3 = "11";
+$vuln_list_4 = "22";
+$vuln_list_5 = "34";
+$vuln_list_6 = "37";
+$vuln_list_7 = "0";
+$vuln_list_8 = "0";
+$vuln_list_9 = "0";
+$vuln_list_10 = "0";
+$vuln_list_11 = "0";
+$vuln_list_12 = "0";
+$vuln_list_13 = "0";
+$vuln_list_14 = "0";
+$vuln_list_15 = "0";
+$vuln_list_16 = "0";
+$vuln_list_17 = "0";
+$vuln_list_18 = "0";
+$vuln_list_19 = "0";
+$vuln_list_20 = "0";
+$vuln_list_21 = "0";
+$vuln_list_22 = "0";
+$vuln_list_23 = "0";
+
+# which hosts to include in host list
+$redhosts = "on";
+$yellowhosts = "off";
+$brownhosts = "off";
+$greenhosts = "off";
+$emptyhosts = "off";
+$toptenhosts = "on";
+
+# list no. of targets for each vulnerability
+$vuln_summary_list = "on";
+
+# merge table cells where possible
+# (in XML, merge host information into a separate layer)
+$merge_cells = "on";
+
+# show severities in vulnerability list as a number
+# between 0 and 3 instead of a word
+$numeric_severities = "off";
+
+# make a separate line for each CVE number
+$separate_cves = "off";
+
+# allow CVEs to be sorted as separate entities,
+# not grouped by vulnerability text
+$disassociate_cves = "off";
+
+# make a link to CVE
+$link_cves = "off";
+
+# whether to force there to be an IAVA column even if
+# none of the above columns are set to IAVA
+$add_iava = "off";
+
+# include hosts with no vulnerabilities in 
+# vulnerability list
+$no_vulnerabilities = "off";
+$no_vulnerabilities_text = "nothing to report";
+
+# Which status categories to cross-reference with
+# severity categories in host list
+$cross_new = "on";
+$cross_removed = "on";
+$cross_existing = "off";
+$cross_reintro = "off";
+
+# Which severity categories to cross-reference with
+# status categories in host list
+$cross_red = "on";
+$cross_yellow = "off";
+$cross_brown = "off";
+$cross_green = "off";
+
+#
+# Technical Details
+#
+
+# Whether to include hosts details for every vulnerability
+# or vulnerability details for every host
+$host_details_option = "on";
+
+# Whether to include technical details (tutorials)
+# ("reverse" = tutorials in appendix)
+$tech_details = "off";
+
+# Whether to show custom tutorial or SAINT
+$techdetails_custom = "off";
+
+# whether to include hosts with no vulnerabilities
+# in details section
+$empty_host_details = "off";
+
+# which details of host to include
+$host_type = "on";
+$netbios_name = "on";
+$scan_time = "on";
+$severity_option = "on";
+$cve_option = "on";
+
+# whether to repeat host information for each
+# vulnerability
+$host_info_always = "off";
+
+# which sections of tutorial to include
+$entire_tutorial = "off";
+$impact = "on";
+$background = "off";
+$problem = "off";
+$resolution = "on";
+$references = "on";
+$vuln_details = "on";
+
+# Whether to include host and vulnerability status
+# information with technical details
+$host_detail_status = "off";
+$vuln_detail_status = "off";
+$cvss_score = "off";
+$incl_id = "off";
+
+#
+# Vulnerabilities
+#
+
+# which vulnerabilities to include
+$allreds = "on";
+$allyellows = "off";
+$allbrowns = "off";
+$allgreens = "off";
+$allinfo = "off";
+#$alltoptens = "on";
+$alltoptens = "off";
+$alliavas = "off";
+#$allhasexploits = "on";
+$allhasexploits = "off";
+
+# The next section allows you to include specific
+# vulnerability categories, without necessarily
+# including the whole severity level
+# ex. $red_http_cgi_access = "on"
+
+# Begin vulnerabilities (do not remove this line)
+# End vulnerabilities (do not remove this line)
+
+# What information to include
+$showrpc = "off";
+$showusers = "off";
+$showshares = "off";
+$showcgipages = "off";
+$showremoteaspexts = "off";
+$showwebdirs = "off";
+$showtoolinfo = "off";
+$showinfocheck = "off";
+
+# Whether to combine information (users, shares, etc.)
+# into one line
+$combine_info = "off";
+
+# Whether to exclude ignored vulnerabilities
+$use_exclusions = "on";
+
+# Which vulnerability status categories to include in
+# vulnerability list and technical details. (Does not
+# affect total counts.)
+# (New, Removed, Existing, or Re-Introduced)
+$show_nvulns = "on";
+$show_rvulns = "off";
+$show_evulns = "on";
+$show_rivulns = "on";
+
+#
+# Hosts
+#
+
+# ("reverse" for any of these inverts the match
+# condition)
+
+# Filter by host/domain name
+$matchdomain = "off";
+$domains = "";
+
+# Filter by IP address
+$matchip = "off";
+$ipaddresses = "";
+
+# Filter by host type
+$matchos = "off";
+$hosttypes = "";
+
+# Which host status categories to include in host list
+# and technical details. (Does not affect total counts.)
+# (New, Removed, Existing, or Re-Introduced)
+$show_nhosts = "on";
+$show_rhosts = "off";
+$show_ehosts = "on";
+$show_rihosts = "on";
+
+#
+# Sorting
+#
+
+# 1=hostname
+# 2=nbname
+# 3=ip or subnet name
+# 4=os
+# 5=vulnerability count by severity
+# 6=top-10s
+# 7=hosts
+# 8=host count by severity
+# 14=cvss score
+
+# host sort keys (1-6)
+$host_sortkey1 = "3";
+$host_sortkey2 = "1";
+$host_sortkey3 = "2";
+
+# subnet sort keys (3,5,7,8)
+$subnet_sortkey1 = "3";
+$subnet_sortkey2 = "7";
+$subnet_sortkey3 = "8";
+
+# vuln sort keys (5,9,10,14)
+$vuln_sortkey1 = "5";
+$vuln_sortkey2 = "9";
+$vuln_sortkey3 = "10";
+
+# sort categories by the number of hosts in
+# the category (instead of alphabetically)
+$cat_sort_count = "off";
+
+# whether to sort backwards
+$invert_host_sort = "off";
+$invert_subnet_sort = "off";
+
+# SAINTmanager options
+
+# Whether to show node name in section headers and graphs
+$show_node_name = "off";
+
+#
+# Trend analysis options
+#
+
+# Data directories to use for trend analysis
+# Begin data sets (do not remove this line)
+# End data sets (do not remove this line)
+
+# Field to use for tracking hosts across data sets
+# (1=host name, 2=Netbios Name, 3=IP, 11=MAC)
+$trend_key = "1";
+
+# show all removed vulnerabilities, instead of just ones
+# removed in current scan
+$show_all_removed = "on";
+
+# Whether to classify reintroduced vulnerabilities as new
+# or treat as separate category. ("reverse" = classify
+# as existing instead)
+$reintro_new = "off";
+
+# Whether to ignore the fact that a host is missing from
+# a scan set. If "off", a missing host will be classified
+# as "removed" (or "reintroduced" if it comes back).
+$ignore_missing = "off";
+
+# Labels for status categories
+$new_text = "new";
+$removed_text = "removed";
+$existing_text = "preexisting";
+$reintro_text = "reintroduced";
+$remaining_text = "remaining";
+
+#
+# XML Options
+#
+
+# top-level XML tag
+$xml_report = "report";
+
+# XML tags for Introduction section
+# (To enable or disable these tags, see the
+# Header section above)
+$xml_intro = "scan_information";
+$xml_report_time = "report_time";
+$xml_scan_time = "scan_time";
+$xml_scan_level = "scan_level";
+$xml_scanner_version = "scanner_version";
+$xml_session = "session";
+
+# XML tags for Summary section
+# (Some tags are derived from chart titles instead
+# of being set here.)
+# (To enable or disable this section, select or
+# deselect the chart types above.)
+$xml_summary = "summary";
+$xml_alllabel = "hosts_detected";
+$xml_redlabel = "reds";
+$xml_yellowlabel = "yellows";
+$xml_brownlabel = "browns";
+$xml_greenlabel = "greens";
+$xml_redhostlabel = "red_hosts";
+$xml_yellowhostlabel = "yellow_hosts";
+$xml_brownhostlabel = "brown_hosts";
+$xml_greenhostlabel = "green_hosts";
+$xml_blackhostlabel = "black_hosts";
+$xml_subnet = "subnet";
+$xml_subnet_name = "subnet_name";
+$xml_subnet_addr = "subnet_addr";
+$xml_class = "class";
+$xml_class_name = "class_name";
+$xml_rank = "rank";
+$xml_top_hosts = "top_hosts";
+$xml_top_host = "top_host";
+$xml_totalvulns = "total_vulns";
+$xml_top_vulns = "top_vulns";
+$xml_top_vuln = "top_vuln";
+$xml_top_services = "top_services";
+$xml_top_service = "top_service";
+$xml_dataset = "dataset";
+$xml_dataset_time = "dataset_time";
+
+# XML tags for Overview section
+# (To enable or disable these tags, use the
+# host_list... and vuln_list... variables above.)
+# (Some tags in this section are derived from
+# the status labels below instead of being set here.)
+$xml_overview = "overview";
+$xml_host_list = "hosts";
+$xml_vuln_summary_list = "vulnerabilities_summary";
+$xml_vuln_list = "vulnerabilities";
+$xml_host = "host";
+$xml_hostname = "hostname";
+$xml_netbios = "netbios";
+$xml_ipaddr = "ipaddr";
+$xml_macaddr = "macaddr";
+$xml_hosttype = "hosttype";
+$xml_toptwenty = "top20";
+$xml_status = "status";
+$xml_recurrences = "recurrences";
+$xml_consecrecur = "consecutive_recurrences";
+$xml_authentication = "authentication";
+$xml_vuln_host = "host_info";
+$xml_vuln = "vulnerability";
+$xml_no_of_targets = "no_of_targets";
+$xml_severity = "severity";
+$xml_vuln_desc = "description";
+$xml_vuln_category = "category";
+$xml_cve = "cve";
+$xml_vuln_toptwenty = "top20";
+$xml_iava = "iava";
+$xml_other = "other_index";
+$xml_vuln_status = "status";
+$xml_vuln_recurrences = "recurrences";
+$xml_vuln_consecrecur = "consecutive_recurrences";
+$xml_vuln_class = "class";
+$xml_confirmed = "confirmed";
+$xml_vuln_id = "vulnerability_id";
+$xml_service = "service";
+$xml_hasexploit = "exploit_available";
+$xml_vuln_bid = "bid";
+$xml_vuln_osvdb = "osvdb";
+$xml_vuln_cpe = "cpe";
+$xml_vuln_cvss = "cvss_base_score";
+$xml_vuln_cvss_vec = "cvss_base_vector";
+$xml_vuln_pci_reason = "pci_fail_reason";
+$xml_vuln_pci_severity = "pci_severity";
+$xml_vuln_pci = "pci_compliant_v";
+$xml_host_pci = "pci_compliant_h";
+$xml_nodename = "node_name";
+$xml_vuln_nsid = "nsid";
+$xml_hasexploitnum = "exploitable";
+$xml_vuln_excluded_comment = "excluded_comment";
+$xml_vuln_excluded = "excluded";
+$xml_vuln_port = "port";
+$xml_vuln_refs = "references";
+$xml_vuln_msid = "microsoft";
+$xml_related = "related_hosts";
+$xml_related_host = "related_host_info";
+$xml_referrer = "referrer";
+$xml_relationship = "relationship";
+$xml_pci_note_list = "special_notes_list";
+$xml_pci_note = "pci_note";
+$xml_pci_noted_item = "pci_noted_item";
+
+# XML tags for Details section
+# (To enable or disable these tags, select or deselect
+# the various tutorial sections above.)
+# (The "category" tag is only used if an appendix is
+# selected in the Details section.)
+$xml_details = "details";
+$xml_impact = "impact";
+$xml_background = "background";
+$xml_problem = "problem";
+$xml_resolution = "resolution";
+$xml_reference = "reference";
+$xml_problem_resolution = "problem_resolution";
+$xml_vuln_details = "vuln_details";
+$xml_category_desc = "category_desc";
+$xml_category = "category";
+
+# whether to include HTML hyperlinks in tutorials in
+# XML reports
+$html_in_xml = "off";
+
+# whether to indent tutorial sections in XML reports to
+# align with tags
+$indent_tutorial = "on";
+
+#
+# Other Options
+#
+
+# class/category map file (.cm)
+$classmap_file = "classmap";
+
+# report width (pixels) for HTML formats
+$rep_width = "600";
+
+# font "size" for HTML formats
+$font_size = "2";
+
+# page numbers in PDF reports
+$page_numbers = "on";
+
+$top_margin = "17";
+$bottom_margin = "15";
+$right_margin = "6";
+$left_margin = "6";
+
+# short severities:
+# on = red, yellow, etc.
+# off = Critical Problems, Areas of Concern, etc.
+#$short_severities = "on";
+$short_severities = "off";
+
+# whether to count all hosts, even if some
+# are filtered out of the report
+$countall = "off";
+
+# If any of the vulnerability categories appear under more
+# than one severity level, treat them as the same category.
+# For example, if "FTP vulnerabilities" appears under both
+# red and brown, and either one is selected, then include
+# all FTP vulnerabilities and group all FTP vulnerabilities
+# together in the category table.
+$combine_categories = "off";
+
+# Show reference URLs instead of hyperlinks in HTML tutorials
+$show_url = "off";
+
+# whether to export results to RiskWatch
+$riskwatch = "off";
+
+$bgcolor = "#0A3078";
+$pdf_bgcolor = "0 .2 .5";
+$report_foot_width = "0";
+
+#
+# Filters by cvss/pci
+#
+$show_hosts_notpci = "off";
+$show_vulns_notpci = "off";
+ # 0 = off, 1 - 10 on
+$show_vulns_above_cvss = "0";
+# when longform is set to "on", the custom report was used
+# only significant to 3 PCI reports.
+$longform = "on";
+
+1;

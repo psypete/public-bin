@@ -1,0 +1,184 @@
+#!/usr/bin/perl
+# niladsh v0.1 - execute commands in parallel
+# 
+# Copyright (C) 2011-2012 Peter Willis <peterwwillis@yahoo.com>
+# 
+
+$|=1;
+use strict;
+use Getopt::Std;
+use POSIX ':sys_wait_h';
+
+my $PARALLEL_NUM = 10;
+my $PARALLEL_APP = "ssh";
+
+################################################################################################
+################################################################################################
+
+my %opts;
+getopts('H:f:u:n:s:', \%opts);
+my $o = parseopts();
+main($o);
+exit(0);
+
+################################################################################################
+################################################################################################
+
+sub parseopts {
+    my @hosts;
+    my $user = (getpwuid($>))[0];
+    my $script;
+
+    HELP_MESSAGE("Specify either -f or -H") if ((exists $opts{'H'} and exists $opts{'f'}) or (!exists $opts{'H'} and !exists $opts{'f'}));
+
+    if ( exists $opts{'u'} ) {
+        $user = $opts{'u'};
+    }
+    if ( exists $opts{'f'} ) {
+        open(my $fd,"<$opts{f}")|| die "Error: cannot read $opts{f}: $!";
+        @hosts = map { chomp; $_ } <$fd>;
+        close($fd);
+    }
+    if ( exists $opts{'H'} ) {
+        @hosts = split(/,/, $opts{'H'});
+    }
+    if ( exists $opts{'n'} ) {
+        $PARALLEL_NUM = $opts{'n'};
+    }
+    if ( exists $opts{'s'} ) {
+        open(my $fd, "<$opts{s}") || die "Error: cannot open script $opts{s}: $!";
+        $script = join("", <$fd>);
+        close($fd);
+    }
+
+    if ( !exists $opts{'s'} and ! @ARGV ) {
+        HELP_MESSAGE("Please supply a command to run");
+    }
+
+    my %h = ( hosts => \@hosts, user => $user, cmd => \@ARGV );
+    $h{'script'} = $script if (defined $script);
+
+    return \%h;
+}
+
+sub main {
+    my $o = shift;
+    
+    my @hosts = @{$o->{'hosts'}}; # preserve original list
+    my $total = scalar @hosts;
+    my $count = 0;
+    my @pids;
+    my $missing;
+
+    for ( ;; ) {
+
+        if ( @hosts ) {
+            $missing = ( $PARALLEL_NUM - scalar @pids );
+
+            # Fill up the pids array
+            if ( $missing ) {
+                for ( my $i=0; $i<$missing; $i++ ) {
+                    last if (!@hosts);
+
+                    my $h = shift @hosts;
+                    my $pid = forknew($o, $h);
+
+                    if ( $pid ) {
+                        push(@pids, $pid);
+                    } else {
+                        print STDERR "Error: could not fork for host $h\n";
+                    }
+
+                    $count++;
+                }
+            }
+        }
+
+        my @newpids;
+        for ( @pids ) {
+            # Process is dead or not signalable by our user, so remove it
+            if ( ! kill(0, $_) ) {
+                next;
+            }
+            # Pid is reaped
+            if ( waitpid($_, WNOHANG) == $_ ) {
+                next;
+            }
+            push(@newpids, $_);
+        }
+        @pids = @newpids;
+
+        if ( ! @hosts and ! @pids ) {
+            last;
+        }
+
+        select(undef, undef, undef, 0.25);
+    }
+
+    print STDERR "\n$0 done\n";
+}
+
+sub forknew {
+    my $o = shift;
+    my $host = shift;
+
+    if ( $host !~ /^[a-zA-Z0-9\.-]+$/ ) {
+        print STDERR "Error: host $host not a valid hostname\n";
+        return;
+    }
+
+    my $pid = fork;
+
+    if ( $pid == 0 ) {
+        child_main($o, $host);
+        exit(0);
+    } elsif ( $pid < 0 ) {
+        print STDERR "Error: could not get a new pid\n";
+        return;
+    }
+
+    #sleep 1;
+    select(undef, undef, undef, 0.1);
+
+    return $pid;
+}
+
+# do stuff here like redirect output to a file or prefix output with '$h: '
+sub child_main {
+    my $o = shift;
+    my $h = shift;
+    my $script = $o->{'script'};
+
+    if ( defined $script ) {
+
+        #$script = quotemeta($script);
+
+        #print STDERR "running script $script on $h\n";
+
+        open(PIPE, "| $PARALLEL_APP $o->{user}\@$h \"cat > /tmp/tmpniladsh-$o->{user}.sc ; chmod 755 /tmp/tmpniladsh-$o->{user}.sc ; /tmp/tmpniladsh-$o->{user}.sc\"") || die "Error: cannot open pipe: $!";
+
+        select PIPE;
+        $|=1;
+        select STDOUT;
+
+        print PIPE "$script\n";
+
+        close(PIPE);
+
+        exit ( ($? >> 8) );
+
+    } else {
+
+        #print STDERR "$0: Running $PARALLEL_APP $o->{user}\@$h @{$o->{cmd}}\n";
+        system($PARALLEL_APP, "$o->{user}\@$h", @{ $o->{'cmd'} });
+        exit ( ($? >> 8) );
+
+   }
+}
+
+sub HELP_MESSAGE {
+    my $msg = ref($_[0]) ? undef : $_[0];
+    print STDERR "Error: $msg\n" if defined $msg;
+    die "Usage: $0 OPTIONS CMD [..]\n\nOptions:\n  -H HOSTS\t\tComma-separated list of hosts to use\n  -f FILE\t\tFile to read hosts from separated by newlines\n  -u USER\t\tUser to connect remotely as\n  -n NUM\t\tNumber of hosts to connect to in parallel\n  -s SCRIPT\t\tSend a SCRIPT to the host to be executed\n";
+}
+

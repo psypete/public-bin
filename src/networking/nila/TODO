@@ -1,0 +1,80 @@
+    - Support querying components of servers
+      - shove a file list from a server (or package list?) either into a blob or multiple blobs, or plan flatfiles on the server, and be able to search through the results based on queries.
+        - possibly make a script that takes package names, or process names?, and inserts them with a cron job (if you don't want to have a full huge file list in a blob or a flat file)
+        
+    - Support authentication, authorization
+      - Each key/val pair in each operation authorized per user or group
+
+      So we have tables, and operations, and we want individual users to be granted access to them.
+      Each operation should be granted a 'read-only' or 'read-write' status.
+      The server will by default grant access to everything unless it is explicitly denied.
+      A wildcard can be used as a catch-all.
+      ACLs can be set and got via the standard API.
+
+      # Allow admin read/write everywhere
+      'user=admin', 'privs=read,write', 'operation=*', 'table=*'
+
+      # Allow willisp read-only access to any operation in table Hosts
+      'user=willisp', 'privs=read', 'operation=*', 'table=Hosts'
+
+      # Allow util471-logcollect read-only access to get operation on table Hosts for only records 'util471' and 'util471-logcollect'
+      'user=util471-logcollect', 'allow=read', 'operation=get', 'table=Hosts', 'record="name=util471"'
+
+      # Allow group 'frontend-devs' read-only access to web servers
+      'group=frontend-devs', 'allow=read', 'operation=get', 'table=Hosts', 'record="conftag=WS*","name=ws*"'
+
+      # Allow any user no priviledges on any operation or table
+      'user=*', 'privs=none', 'operation=*', 'table=*'
+
+      You can store the ACLs:
+        - in the table that applies
+        - as part of the record of the user in a Users table
+      
+      Once you authenticate a user, a session cookie would be nice.
+      Once this session is created we would like an easy way to verify it each time an API request is
+      made. This session data can contain a quick reference of which ACLs apply, so we don't have to 
+      do any further looking up. We'd just need to update this session cache thing every time the user
+      props changed. Doing this operation once per property change would be less heavy on the server
+      than doing a separate ACL lookup. However if we're just grabbing a user record from the db to get
+      this session cache, and the ACLs are part of this record, we don't need to update it.
+
+      So we want a Users table with session AND acl information. It is referenced for each operation,
+      not only for authentication but authorization.
+
+      Let's say we have a 'all users are blocked' default rule and a 'this user has limited access'
+      rule. We need to be able to check defaults and user-specific rules. At some point we may have to
+      support groups. Fuck it, we need groups out of the box.
+
+      If you specify a group for a user we will also look up the ACLs for that group and tack them onto
+      the ACLs to apply for the user. User rules, group rules, default rules. To save time we will look
+      up both the default rules and user's rules in the same SQL query, and the group rules in a second
+      query if the user has a group set.
+
+      Of course now we have to consider that at some point some asshole is going to want to overlay 
+      ldap or mysql or some other shitty sore of user data on top of the ACLs, so their fucking windows
+      domain users can be automatically authenticated by our code, and they'll be blissfully ignorant
+      of the shit we have to do to map that completely different database to our ACL API. But it's
+      doable.
+
+      The complicated method is more than I want to code for the first iteration of the auth layer, so
+      i'll just allow them to specify an executable that I can pass a username and password to and it'll
+      return to us whether they're authorized and any other data our auth API would want to know, so
+      they can make their own hacky patchy 3rd party auth layer. It's the UNIX way. Or something.
+
+      That'll never be efficient... execute some piped application for every user query? You need to cache
+      the response. One way is with a native Perl application which communicates with the piped app and
+      returns cached or real results. This is abstraction for a thing which we may not even need - auth.
+      So. The ideal is to have everything cached - user auth creds, ACLs, etc.
+
+      Fuck efficiency, there's no easy way to do it. Just execute everything as each query comes in.
+      When we need efficiency you can use something like memcached.
+
+
+
+
+    - Support Windows
+    - Build simple HTTP client into 'nila' to replace curl
+    - Support JSON querying & results
+    - Be more RESTful
+    - Support non-unique hostnames
+    - Support SQLite
