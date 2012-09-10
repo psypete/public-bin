@@ -62,15 +62,13 @@ function wrap_ssh() {
 
     case "$HOST" in 
         # Use jump server for plano/charlotte servers
-        pln*|clt*)
-            #exec $SSHPASS $SSHPASS_OPTS ssh $SSH_OPTS -t 150.123.72.91 ssh $SSH_OPTS "$HOST" "$@"
-            runssh "150.123.72.91" "$HOST" "$@"
+        la*|was*)
+            runssh "JUMP-1" "$HOST" "$@"
             ;;
 
         # Use jump server for NY4/KWA servers
-        ny4*|kwa*)
-            #exec $SSHPASS $SSHPASS_OPTS ssh $SSH_OPTS -t kwalxutilp015.finra.org ssh $SSH_OPTS "$HOST" "$@"
-            runssh "kwalxutilp015.finra.org" "$HOST" "$@"
+        ny*|bos*)
+            runssh "JUMP-2" "$HOST" "$@"
             ;;
 
         # Just SSH straight to the machine
@@ -87,14 +85,14 @@ function wrap_scp() {
     for arg in "$@" ; do
         case "$arg" in
             # Use jump server for plano/charlotte servers
-            pln*|clt*)
-                JUMPSVR="150.123.72.91"
+            la*|was*)
+                JUMPSVR="JUMP-1"
                 LASTOPT="$arg"
                 ;;
 
             # Use jump server for NY4/KWA servers
-            ny4*|kwa*)
-                JUMPSVR="kwalxutilp015.finra.org"
+            ny*|bos*)
+                JUMPSVR="JUMP-2"
                 LASTOPT="$arg"
                 ;;
 
