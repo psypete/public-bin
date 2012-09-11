@@ -50,6 +50,10 @@ ifeq ($(USE_FILTERING),1)
 	FLAGS += -DUSE_FILTERING
 endif
 
+#ifeq ($(OSTYPE),cygwin)
+#	OBJECTS += -lws2_32
+#endif
+
 all: ethereal
 
 tcp.o: tcp.c
@@ -71,7 +75,7 @@ filtering.o: filtering.c
 	$(CC) $(FLAGS) -c filtering.c
 
 ethereal: $(OBJECTS)
-	$(CC) $(FLAGS) ${PROG}.c -o ${PROG} $(OBJECTS)
+	if [ "$$OSTYPE" = "cygwin" ] ; then $(CC) $(FLAGS) ${PROG}.c -o ${PROG} $(OBJECTS) -lws2_32 ; else $(CC) $(FLAGS) ${PROG}.c -o ${PROG} $(OBJECTS) ; fi
 	[ $(DEBUG) -eq 1 ] || strip ${PROG}
 
 clean:

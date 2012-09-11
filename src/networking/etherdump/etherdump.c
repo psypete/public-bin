@@ -21,17 +21,31 @@
  *  Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
  */
 
+/*
+ * Some Windows code stolen shamelessly from http://www.binarytides.com/packet-sniffer-code-in-c-using-winsock/
+ */
+
+#ifdef __CYGWIN__
+#include <winsock2.h>
+#include <ws2tcpip.h> //IP_HDRINCL is here
+//#include <mstcpip.h>
+#define SIO_RCVALL            _WSAIOW(IOC_VENDOR,1)
+#define PACKET_OUTGOING          4
+#pragma comment(lib,"ws2_32.lib") //winsock 2.2 library
+#else
 #include <netpacket/packet.h>
+#include <netdb.h>
 #include <netinet/in.h>
 #include <sys/socket.h>
-#include <sys/ioctl.h>
 #include <arpa/inet.h>
 #include <net/if.h>
+#endif
+
+#include <sys/ioctl.h>
 #include <unistd.h>
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <fcntl.h>
-#include <netdb.h>
 #include <sys/time.h>
 #include <ctype.h>
 #include <getopt.h>
@@ -168,19 +182,30 @@ struct protoent * my_getproto(unsigned char *name) {
 int main( int argc, char *argv[] )
 {
     unsigned char buffer[RAW_SOCK_BUFSIZ];
-    int raw_sock, n;
-
-    struct sockaddr_ll sll;
+    int n, optval;
+#ifdef __CYGWIN__
+    SOCKET raw_sock;
+    WSADATA wsock;
+    struct sockaddr_in intfaceAddr; /* Multicast Address */
+    int j=0, in=0;
+    char hostname[100];
+    struct hostent *localhn;
+    struct in_addr addr;
+#else
+    int raw_sock;
     struct packet_mreq mr;
     struct ifreq ifr;
+#endif
+
+    struct my_sockaddr_ll sll;
     int socktype = SOCK_DGRAM;
 
     int i;
     char *outputfile = NULL;
-    int dumptype = 0; /* 0 for disabled, 1 for ASCII hex, 2 for raw binary */
-    char interface[16];
+    int dumptype = 0; // 0 for disabled, 1 for ASCII hex, 2 for raw binary
+    char intface[16];
 
-    struct sockaddr_ll from;
+    struct my_sockaddr_ll from;
     unsigned int fromlen;
 
     int p_filter_idx = 0;
@@ -197,8 +222,8 @@ int main( int argc, char *argv[] )
     }
 
 
-    // default interface: eth0
-    strncpy(interface, "eth0", sizeof(interface));
+    // default intface: eth0
+    strncpy(intface, "eth0", sizeof(intface));
 
     while ((i = getopt_long (argc, argv, "hHtro:ei:f:d",
             etherdump_long_options, NULL)) > 0)
@@ -220,8 +245,8 @@ int main( int argc, char *argv[] )
             outputfile = optarg;
             break;
         case 'i':
-            memset(interface, '\0', sizeof(interface));
-            strncpy(interface, optarg /*argv[optind]*/, sizeof(interface));
+            memset(intface, '\0', sizeof(intface));
+            strncpy(intface, optarg /*argv[optind]*/, sizeof(intface));
             break;
         case 'f':
             if ( (p_filter_idx = parse_filter(argc, argv, optind-1, p_filters)) == -1) {
@@ -233,36 +258,79 @@ int main( int argc, char *argv[] )
      }
     }
 
-    if (strlen(interface) < 1) {
+    if (strlen(intface) < 1) {
         show_usage("no interface specified");
         return(1);
     }
 
+#ifdef __CYGWIN__
+    printf("\nInitialising Winsock...");
+    if (WSAStartup(MAKEWORD(2,2),&wsock) != 0) {
+        fprintf(stderr,"WSAStartup() failed");
+        exit(EXIT_FAILURE);
+    }
+    printf("Winsock Initialised successfully.\n");
+#endif
+
     /* create the raw socket */
-    if( ( raw_sock = socket( PF_PACKET, socktype, htons( ETH_P_ALL ) ) ) < 0 ) {
+#ifdef __CYGWIN__
+    if ( ( raw_sock = socket( AF_INET, SOCK_RAW, IPPROTO_RAW ) ) == SOCKET_ERROR ) {
+#else
+    if ( ( raw_sock = socket( PF_PACKET, socktype, htons( ETH_P_ALL ) ) ) < 0 ) {
+#endif
         perror( "socket" );
         return( 1 );
     }
 
-    /* find the interface index */
+#ifdef __CYGWIN__
+    /*if (gethostname(hostname, sizeof(hostname)) == SOCKET_ERROR) {
+        printf("Error : %d",WSAGetLastError());
+        return 1;
+    }
+    printf("\nHost name : %s \n",hostname);
+    localhn = gethostbyname(hostname);*/
+
+    memset(&intfaceAddr, 0, sizeof(intfaceAddr));
+    intfaceAddr.sin_family = AF_INET;
+    intfaceAddr.sin_addr.s_addr = htonl(INADDR_ANY);
+    intfaceAddr.sin_port = 0;
+
+    //memcpy( &addr, localhn->h_addr_list[0], sizeof(struct in_addr) );
+    //memcpy( &intfaceAddr.sin_addr.s_addr, &addr, sizeof(intfaceAddr.sin_addr.s_addr) );
+
+    //printf("Interface Number : %d Address : %s\n", 0, inet_ntoa(addr) );
+
+    if ( bind( raw_sock, (struct sockaddr *) &intfaceAddr, sizeof( intfaceAddr ) ) == SOCKET_ERROR ) {
+#else
+    /* find the intface index */
     memset( &ifr, 0, sizeof( ifr ) );
-    strncpy( ifr.ifr_name, interface, sizeof( ifr.ifr_name ) );
+    strncpy( ifr.ifr_name, intface, sizeof( ifr.ifr_name ) );
     if( ioctl( raw_sock, SIOCGIFINDEX, &ifr ) < 0 ) {
         perror( "ioctl(SIOCGIFINDEX)" );
         return( 1 );
     }
 
-    /* bind the raw socket to the interface */
+    /* bind the raw socket to the intface */
     memset( &sll, 0, sizeof( sll ) );
     sll.sll_family   = AF_PACKET;
     sll.sll_ifindex  = ifr.ifr_ifindex;
     sll.sll_protocol = htons( ETH_P_ALL );
-    if( bind( raw_sock, (struct sockaddr *) &sll, sizeof( sll ) ) < 0 ) {
+
+    if ( bind( raw_sock, (struct sockaddr *) &sll, sizeof( sll ) ) < 0 ) {
+#endif
         perror( "bind" );
         return( 1 );
     }
 
     /* enable promiscuous mode */
+#ifdef __CYGWIN__
+    printf("\nSetting socket to sniff...");
+    if ( WSAIoctl(raw_sock, SIO_RCVALL, &j, sizeof(j), 0, 0, (LPDWORD) &in , 0 , 0) == SOCKET_ERROR ) {
+        printf("WSAIoctl() failed.\n");
+        return 1;
+    }
+    printf("Socket set.\n");
+#else
     memset( &mr, 0, sizeof( mr ) );
     mr.mr_ifindex = ifr.ifr_ifindex;
     mr.mr_type    = PACKET_MR_PROMISC;
@@ -270,6 +338,7 @@ int main( int argc, char *argv[] )
         perror( "setsockopt" );
         return( 1 );
     }
+#endif
 
     F_logfd = stdout;
 
@@ -287,12 +356,18 @@ int main( int argc, char *argv[] )
 
     while ( 1 ) {
 
+        fprintf(stderr, "looping\n");
+
         memset(buffer, 0, sizeof(buffer));
 
         /* wait for packets */
         fromlen = sizeof( from );
         /* handle error from recvfrom */
+#ifdef __CYGWIN__
+        if ( ( n = recvfrom( raw_sock, buffer, RAW_SOCK_BUFSIZ, 0, NULL, 0 ) ) < 0 ) {
+#else
         if ( ( n = recvfrom( raw_sock, buffer, RAW_SOCK_BUFSIZ, 0, (struct sockaddr *) &from, &fromlen ) ) < 0 ) {
+#endif
             if( errno == ENETDOWN ) {
                 if (debug) fprintf(stderr, "sleeping for 30 secs\n");
                 sleep( 30 );
@@ -303,8 +378,10 @@ int main( int argc, char *argv[] )
             }
         }
 
-        /* skip duplicate packets on the loopback interface */
-        if( from.sll_pkttype == PACKET_OUTGOING && ! strcmp( interface, "lo" ) ) {
+        fprintf(stderr, "woohoo!!\n");
+
+        /* skip duplicate packets on the loopback intface */
+        if( from.sll_pkttype == PACKET_OUTGOING && ! strcmp( intface, "lo" ) ) {
             if (debug)
                 fprintf(stderr, "skipping loopback duplicate packet\n");
             continue;

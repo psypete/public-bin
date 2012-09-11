@@ -1,12 +1,15 @@
-/*
-#include <stdio.h>
-#include <string.h>
-#include <time.h>
-#include <sys/socket.h>
-#include <netinet/in.h>
-#include <netpacket/packet.h>
-*/
+
+// #include <stdio.h>
+// #include <string.h>
+// #include <time.h>
+// #include <sys/socket.h>
+// #include <netinet/in.h>
+// #include <netpacket/packet.h>
+
+#ifndef __CYGWIN__
 #include <arpa/inet.h>
+#endif
+
 #include "etherdump.h"
 
 

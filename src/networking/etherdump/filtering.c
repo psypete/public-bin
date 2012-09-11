@@ -1,16 +1,18 @@
 #include <stdio.h>
 #include <string.h>
 #include <time.h>
+#ifndef __CYGWIN__
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
 #include <netpacket/packet.h>
+#endif
 #include <stdlib.h>
 #include "etherdump.h"
 
 
 
-int filter_packet( struct sockaddr_ll *from, void *main_packet, void *packet, struct packet_filter_rule *filters, int filter_idx ) {
+int filter_packet( struct my_sockaddr_ll *from, void *main_packet, void *packet, struct packet_filter_rule *filters, int filter_idx ) {
 
     int i, j, bad_filter=0;
     struct ip_packet *ip;

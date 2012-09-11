@@ -1,10 +1,17 @@
 // etherdump.h
 
-#include <netdb.h>
 #include <stdio.h>
-#include <netpacket/packet.h>
 
-#define RAW_SOCK_BUFSIZ 4096
+#ifdef __CYGWIN__
+#include <winsock2.h>
+#include <ws2tcpip.h> //IP_HDRINCL is here
+#pragma comment(lib,"ws2_32.lib") //winsock 2.2 library
+#else
+#include <netpacket/packet.h>
+#include <netdb.h>
+#endif
+
+#define RAW_SOCK_BUFSIZ 65536
 #define FILTDEBUG (debug>5)
 
 
@@ -69,6 +76,22 @@
 #ifndef SOL_ICMP
 #define SOL_ICMP         1
 #endif
+
+
+// Add this for Cygwin environment compatibility
+
+
+struct my_sockaddr_ll {
+    unsigned short sll_family;   /* Always AF_PACKET */
+    unsigned short sll_protocol; /* Physical layer protocol */
+    int            sll_ifindex;  /* Interface number */
+    unsigned short sll_hatype;   /* Header type */
+    unsigned char  sll_pkttype;  /* Packet type */
+    unsigned char  sll_halen;    /* Length of address */
+    unsigned char  sll_addr[8];  /* Physical layer address */
+};
+
+
 
 
 #ifdef USE_FILTERING
@@ -204,7 +227,7 @@ struct arp_packet
 };
 
 int process_arp_packet( struct arp_hdr *arp, struct arp_packet *packet );
-int process_arp(unsigned char *buffer, int n, struct sockaddr_ll *from, struct packet_filter_rule *p_filters, int p_filter_idx);
+int process_arp(unsigned char *buffer, int n, struct my_sockaddr_ll *from, struct packet_filter_rule *p_filters, int p_filter_idx);
 #endif
 
 
@@ -243,7 +266,7 @@ struct ip_packet
 };
 
 int process_ip_packet( struct ip_hdr *ip, struct ip_packet *packet );
-int process_ip(unsigned char *buffer, int n, struct sockaddr_ll *from, struct packet_filter_rule *filters, int filter_idx);
+int process_ip(unsigned char *buffer, int n, struct my_sockaddr_ll *from, struct packet_filter_rule *filters, int filter_idx);
 #endif
 
 
@@ -343,7 +366,7 @@ int process_udp_packet( struct ip_packet *ip, struct udp_hdr *udp, struct udp_pa
 
 
 #ifdef USE_FILTERING
-int filter_packet( struct sockaddr_ll *from, void *main_packet, void *packet, struct packet_filter_rule *filters, int filter_idx );
+int filter_packet( struct my_sockaddr_ll *from, void *main_packet, void *packet, struct packet_filter_rule *filters, int filter_idx );
 int parse_filter(int argc, char **argv, int i, struct packet_filter_rule *p);
 #endif
 

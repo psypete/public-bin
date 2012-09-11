@@ -1,11 +1,13 @@
 #include <stdio.h>
 #include <string.h>
 #include <time.h>
+#ifndef __CYGWIN__
 #include <sys/time.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
 #include <netpacket/packet.h>
+#endif
 #include "etherdump.h"
 
 
@@ -50,7 +52,7 @@ int process_arp_packet( struct arp_hdr *arp, struct arp_packet *packet ) {
 }
 
 
-int process_arp(unsigned char *buffer, int n, struct sockaddr_ll *from, struct packet_filter_rule *filters, int filter_idx) {
+int process_arp(unsigned char *buffer, int n, struct my_sockaddr_ll *from, struct packet_filter_rule *filters, int filter_idx) {
 
     int next_packet;
     struct arp_packet packet_arp;

@@ -1,11 +1,13 @@
 #include <stdio.h>
 #include <string.h>
 #include <time.h>
-#include <sys/time.h>
+#ifndef __CYGWIN__
+//#include <sys/time.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
 #include <netpacket/packet.h>
+#endif
 #include "etherdump.h"
 
 
@@ -36,7 +38,7 @@ int process_ip_packet( struct ip_hdr *ip, struct ip_packet *packet ) {
     return( 0 );
 }
 
-int process_ip(unsigned char *buffer, int n, struct sockaddr_ll *from, struct packet_filter_rule *filters, int filter_idx) {
+int process_ip(unsigned char *buffer, int n, struct my_sockaddr_ll *from, struct packet_filter_rule *filters, int filter_idx) {
 
     struct ip_packet packet_ip;
 #ifdef USE_TCP
