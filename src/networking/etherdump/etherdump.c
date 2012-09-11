@@ -274,7 +274,7 @@ int main( int argc, char *argv[] )
 
     /* create the raw socket */
 #ifdef __CYGWIN__
-    if ( ( raw_sock = socket( AF_INET, SOCK_RAW, IPPROTO_RAW ) ) == SOCKET_ERROR ) {
+    if ( ( raw_sock = socket( AF_INET, SOCK_RAW, IPPROTO_IP ) ) == SOCKET_ERROR ) {
 #else
     if ( ( raw_sock = socket( PF_PACKET, socktype, htons( ETH_P_ALL ) ) ) < 0 ) {
 #endif
