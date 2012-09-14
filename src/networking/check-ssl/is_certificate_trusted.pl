@@ -86,7 +86,8 @@ sub main {
         ) {
             # Now find out if new cert is a CA, or has more links in the chain
             if ( cert_is_root_ca($tmpissuer) ) {
-                die "Error: Found the root CA ($tmpissuer->{'subject'}) but it isn't in our list of trusted CAs!";
+                #die "Error: Found the root CA ($tmpissuer->{'subject'}) but it isn't in our list of trusted CAs!";
+                print STDERR "Found root CA $tmpissuer->{'subject'}\n" if $VERBOSE;
             }
         } else {
             # The previous cert wasn't chained to this one? Hacker!!
@@ -97,14 +98,33 @@ sub main {
 
         if ( ! @uris ) {
 
+            my $match_ca = 0;
+
             # We have no more links in the chain, so check the CA root files
             # to see if one of them matches the current one's auth key or issuer
             foreach my $ca ( @cacerts ) {
+
                 if (
-                       ( $tmpissuer->{'auth_key_ident'} eq $ca->{'subj_key_ident'} )
-                    or ( $tmpissuer->{'issuer'} eq $ca->{'subject'} )
+                    defined $tmpissuer->{'auth_key_ident'} and length $tmpissuer->{'auth_key_ident'}
+                    and defined $ca->{'subj_key_ident'} and length $ca->{'subj_key_ident'}
+                    and $tmpissuer->{'auth_key_ident'} eq $ca->{'subj_key_ident'}
                 ) {
+                    $match_ca = 1;
+                    print STDERR "Issuer auth key matches CA subj key: $tmpissuer->{'auth_key_ident'}\n" if $VERBOSE;
+                }
+
+                if (
+                    defined $tmpissuer->{'issuer'} and length $tmpissuer->{'issuer'}
+                    and defined $ca->{'subject'} and length $ca->{'subject'}
+                    and $tmpissuer->{'issuer'} eq $ca->{'subject'}
+                ) {
+                    $match_ca += 2;
+                    print STDERR "Issuer text matches CA text: $tmpissuer->{'issuer'}\n" if $VERBOSE;
+                }
+
+                if ( $match_ca ) {
                     print "Root CA subject: '$ca->{'subject'}'\n" if $VERBOSE;
+
                     if ( cert_is_root_ca($ca) ) {
                         print "Found root CA for $CERT: $ca->{'subject'}\n";
                         return 1;
@@ -112,6 +132,7 @@ sub main {
                         die "Root CA isn't a root CA!";
                     }
                 }
+
             }
 
             die "Error: new cert '$tmpissuer->{'subject'}' does not match old cert '$old->{'issuer'}', and there's no more chain to go up!\n";
@@ -270,7 +291,12 @@ sub cert_is_root_ca {
     my @pair2 = ('subject', 'issuer');
 
     for ( (\@pair1, \@pair2) ) {
-        if ( $cert->{$_->[0]} eq $cert->{$_->[1]} ) {
+        if ( 
+            defined $cert->{$_->[0]} and length $cert->{$_->[0]} and
+            defined $cert->{$_->[1]} and length $cert->{$_->[1]} and
+            $cert->{$_->[0]} eq $cert->{$_->[1]} 
+        ) {
+            print STDERR "CA data $cert->{$_->[0]} equals $cert->{$_->[1]}\n" if $VERBOSE;
             return 1;
         }
     }
