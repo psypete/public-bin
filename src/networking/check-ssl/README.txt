@@ -1,5 +1,12 @@
 All of the stuff in this directory works.
 
+The Makefile and associated scripts in this directory can be used to
+scan a list of IP addresses for HTTPS servers, grab the certificates,
+and verify they are properly signed by a trusted Certificate Authority.
+It does not examine whether they are expired, though an additional
+script that generates a CSV-format report does. Check the Makefile
+for an idea how it all works.
+
 Useful scripts:
 
  * csv_report_of_certs.pl       - Given a list of certificates, prints a CSV
