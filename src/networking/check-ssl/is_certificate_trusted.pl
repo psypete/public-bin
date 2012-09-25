@@ -49,11 +49,11 @@ sub main {
         } glob("$CACERTDIR/*");
 
     my $data = load_certificate($CERT);
-    my $cert = read_cert_text($data);
+    my $cert = (read_cert_text($data))[0];
 
     print "Certificate Subject: '$cert->{'subject'}'\n" if $VERBOSE;
 
-    die "Error: this is a CA certificate or a self-signed certificate!\n" if cert_is_root_ca($cert);
+    die "Error: this is a CA certificate or a self-signed certificate!\n" if certs_linked($cert);
         
     my @issuers;
     my $counter = 0;
@@ -61,85 +61,98 @@ sub main {
     # Loop over any CA Issuers recursively, resolving the chain of trust
 
     my @uris = @{ $cert->{'ca_issuers'} };
-    my $old = $cert;
+    my @old = ( $cert );
     while ( @uris ) {
 
-        my $tmpissuer;
+        my @tmpissuer;
         my @tmpuris = @uris;
         @uris = ();
 
-        for my $cai ( @tmpuris ) {
+        while ( @tmpuris ) {
+            my $cai = shift @tmpuris;
             if ( $cai =~ /^http/i ) {
-                my $tmpcert = download_issuer($cai);
-                if ( defined $tmpcert ) {
-                    $tmpissuer = $tmpcert;
-                    print "Issuer Subject: '$tmpissuer->{'subject'}'\n" if $VERBOSE;
+                my @tmpcerts = download_issuer($cai);
+
+                for ( @tmpcerts ) {
+                    push(@tmpissuer, $_);
+                    print "Found Issuer Subject: '$_->{'subject'}'\n" if $VERBOSE;
                     last;
                 }
             }
         }
 
-        # Check if the previous cert is chained to the new one
-        if ( 
-               ( $old->{'auth_key_ident'} eq $tmpissuer->{'subj_key_ident'} )
-            or ( $old->{'issuer'} eq $tmpissuer->{'subject'} )
-        ) {
-            # Now find out if new cert is a CA, or has more links in the chain
-            if ( cert_is_root_ca($tmpissuer) ) {
-                #die "Error: Found the root CA ($tmpissuer->{'subject'}) but it isn't in our list of trusted CAs!";
-                print STDERR "Found root CA $tmpissuer->{'subject'}\n" if $VERBOSE;
-            }
-        } else {
-            # The previous cert wasn't chained to this one? Hacker!!
-            die "Error: the cert isn't chained to the next one found!";
-        }
+        foreach my $tmpissuer ( @tmpissuer ) {
 
-        @uris = @{$tmpissuer->{'ca_issuers'}};
+            # Check if the previous cert is chained to the new one
+            foreach my $old ( @old ) {
+                #if ( 
+                #       ( $old->{'auth_key_ident'} eq $tmpissuer->{'subj_key_ident'} )
+                #    or ( $old->{'issuer'} eq $tmpissuer->{'subject'} )
+                #) {
 
-        if ( ! @uris ) {
+                if ( certs_linked( $tmpissuer, $old ) ) {
 
-            my $match_ca = 0;
-
-            # We have no more links in the chain, so check the CA root files
-            # to see if one of them matches the current one's auth key or issuer
-            foreach my $ca ( @cacerts ) {
-
-                if (
-                    defined $tmpissuer->{'auth_key_ident'} and length $tmpissuer->{'auth_key_ident'}
-                    and defined $ca->{'subj_key_ident'} and length $ca->{'subj_key_ident'}
-                    and $tmpissuer->{'auth_key_ident'} eq $ca->{'subj_key_ident'}
-                ) {
-                    $match_ca = 1;
-                    print STDERR "Issuer auth key matches CA subj key: $tmpissuer->{'auth_key_ident'}\n" if $VERBOSE;
-                }
-
-                if (
-                    defined $tmpissuer->{'issuer'} and length $tmpissuer->{'issuer'}
-                    and defined $ca->{'subject'} and length $ca->{'subject'}
-                    and $tmpissuer->{'issuer'} eq $ca->{'subject'}
-                ) {
-                    $match_ca += 2;
-                    print STDERR "Issuer text matches CA text: $tmpissuer->{'issuer'}\n" if $VERBOSE;
-                }
-
-                if ( $match_ca ) {
-                    print "Root CA subject: '$ca->{'subject'}'\n" if $VERBOSE;
-
-                    if ( cert_is_root_ca($ca) ) {
-                        print "Found root CA for $CERT: $ca->{'subject'}\n";
-                        return 1;
-                    } else {
-                        die "Root CA isn't a root CA!";
+                    # Now find out if new cert is a CA, or has more links in the chain
+                    if ( certs_linked($tmpissuer) ) {
+                        print STDERR "Found root CA $tmpissuer->{'subject'}\n" if $VERBOSE;
                     }
+                } else {
+                    # The previous cert wasn't chained to this one? Hacker!!
+                    die "Error: the cert isn't chained to the next one found!";
                 }
-
             }
 
-            die "Error: new cert '$tmpissuer->{'subject'}' does not match old cert '$old->{'issuer'}', and there's no more chain to go up!\n";
         }
 
-        $old = $tmpissuer;
+        push( @uris, map { exists $_->{'ca_issuers'} ? @{$_->{'ca_issuers'}} : () } @tmpissuer );
+
+        @old = @tmpissuer;
         $counter++;
+    }
+
+
+    my $match_ca = 0;
+
+    # We have no more links in the chain, so check the CA root files
+    # to see if one of them matches the current one's auth key or issuer
+    foreach my $old (@old) {       
+
+        foreach my $ca ( @cacerts ) {
+            #if (
+            #    defined $old->{'auth_key_ident'} and length $old->{'auth_key_ident'}
+            #    and defined $ca->{'subj_key_ident'} and length $ca->{'subj_key_ident'}
+            #    and $old->{'auth_key_ident'} eq $ca->{'subj_key_ident'}
+            #) {
+
+            if ( certs_linked( $ca, $old ) ) {
+                $match_ca = 1;
+                print STDERR "Issuer auth key matches CA subj key: $old->{'auth_key_ident'}\n" if $VERBOSE;
+            }
+
+            if (
+                defined $old->{'issuer'} and length $old->{'issuer'}
+                and defined $ca->{'subject'} and length $ca->{'subject'}
+                and $old->{'issuer'} eq $ca->{'subject'}
+            ) {
+                $match_ca += 2;
+                print STDERR "Issuer text matches CA text: $old->{'issuer'}\n" if $VERBOSE;
+            }
+
+            if ( $match_ca ) {
+                print "Root CA subject: '$ca->{'subject'}'\n" if $VERBOSE;
+    
+                if ( certs_linked($ca) ) {
+                    print "Found root CA for $CERT: $ca->{'subject'}\n";
+                    return 1;
+                } else {
+                    die "Root CA isn't a root CA!";
+                }
+            }
+
+        }
+
+        die "Error: new cert '$old->{'subject'}' does not match old cert '$old->{'issuer'}', and there's no more chain to go up!\n";
+
     }
 
     return 0;
@@ -153,7 +166,7 @@ sub download_issuer {
 
     if ( -e "ca-issuer-$digest.cer" ) {
 
-        print STDERR "Using cached issuer ca-issuer-$digest.cer\n";
+        print STDERR "Using cached issuer ca-issuer-$digest.cer\n" if $VERBOSE >= 2;
         $data = load_data("ca-issuer-$digest.cer");
 
     } else {
@@ -241,7 +254,7 @@ sub load_certificate {
     if ( defined $inform and length $inform ) {
         # Convert cert data to text
 
-        print "Decoding $inform certificate data\n" if $VERBOSE;
+        print "Decoding $inform certificate data\n" if $VERBOSE >= 2;
 
         my $readcmd;
         
@@ -276,13 +289,22 @@ sub load_certificate {
 sub read_cert_text {
     my $data = shift;
     my %h;
-    my @caissuers;
+    my @hashes;
+    my $hn;
 
     for ( my $i=0; $i<@$data; $i++ ) {
         $_ = $data->[$i];
 
-        if ( /CA Issuers - URI:(.+)/ ) {
-            push(@caissuers, $1);
+        if ( /^Certificate:\s*$/ ) {
+            $hn = defined $hn ? $hn+1 : 0;
+            if ( $hn > 0 ) {
+                push( @hashes, \%h );
+                %h = ();
+            }
+        
+        } elsif ( /CA Issuers - URI:(.+)/ ) {
+            $h{'ca_issuers'} = [] if (!exists $h{'ca_issuers'});
+            push( @{$h{'ca_issuers'}}, $1);
 
         } elsif ( /X509v3 Subject Key Identifier:/ ) {
             $_ = $data->[++$i];
@@ -306,26 +328,34 @@ sub read_cert_text {
         }
     }
 
-    $h{'ca_issuers'} = \@caissuers;
+    push( @hashes, \%h );
 
-    return \%h;
+    return @hashes;
 }
 
 
-# Returns true if either the key idents or subject/issuer are the same
-sub cert_is_root_ca {
+# Compares $_[0] subject to $_[1] auth/issuer.
+# if $_[1] not passed, uses $_[0] (returns true if root CA)
+sub certs_linked {
     my $cert = shift;
+    my $cert2 = shift;
     my @pair1 = ('subj_key_ident', 'auth_key_ident');
     my @pair2 = ('subject', 'issuer');
+
+    if  (!defined $cert2) {
+        $cert2 = $cert;
+    }
 
     for ( (\@pair1, \@pair2) ) {
         if ( 
             defined $cert->{$_->[0]} and length $cert->{$_->[0]} and
-            defined $cert->{$_->[1]} and length $cert->{$_->[1]} and
-            $cert->{$_->[0]} eq $cert->{$_->[1]} 
+            defined $cert2->{$_->[1]} and length $cert2->{$_->[1]} and
+            $cert->{$_->[0]} eq $cert2->{$_->[1]} 
         ) {
-            print STDERR "CA data $cert->{$_->[0]} equals $cert->{$_->[1]}\n" if $VERBOSE;
+            print STDERR "Cert1 $_->[0] '$cert->{$_->[0]}' equals Cert2 $_->[1] '$cert2->{$_->[1]}'\n" if $VERBOSE;
             return 1;
+        } else {
+            print STDERR "Cert1 $_->[0] '$cert->{$_->[0]}' NOT equals Cert2 $_->[1] '$cert2->{$_->[1]}'\n" if ($VERBOSE >= 2);
         }
     }
 
