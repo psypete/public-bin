@@ -60,7 +60,7 @@ sub main {
 
     # Loop over any CA Issuers recursively, resolving the chain of trust
 
-    my @uris = @{ $cert->{'ca_issuers'} };
+    my @uris = exists $cert->{'ca_issuers'} ? @{ $cert->{'ca_issuers'} } : ();
     my @old = ( $cert );
     while ( @uris ) {
 
@@ -132,7 +132,8 @@ sub main {
 
         }
 
-        die "Error: new cert '$old->{'subject'}' does not match old cert '$old->{'issuer'}', and there's no more chain to go up!\n";
+        print STDERR "Error: new cert '$old->{'subject'}' does not match old cert '$old->{'issuer'}', and there's no more chain to go up!\n" if $VERBOSE;
+        last;
 
     }
 
@@ -328,15 +329,19 @@ sub certs_linked {
     }
 
     for ( (\@pair1, \@pair2) ) {
-        if ( 
-            defined $cert->{$_->[0]} and length $cert->{$_->[0]} and
-            defined $cert2->{$_->[1]} and length $cert2->{$_->[1]} and
-            $cert->{$_->[0]} eq $cert2->{$_->[1]} 
+        if (
+            (exists $cert->{$_->[0]} and length($cert->{$_->[0]}) > 0) 
+            and (exists $cert2->{$_->[1]} and length($cert2->{$_->[1]}) > 0)
         ) {
-            print STDERR "Cert1 $_->[0] '$cert->{$_->[0]}' equals Cert2 $_->[1] '$cert2->{$_->[1]}'\n" if $VERBOSE;
-            return 1;
-        } else {
-            print STDERR "Cert1 $_->[0] '$cert->{$_->[0]}' NOT equals Cert2 $_->[1] '$cert2->{$_->[1]}'\n" if ($VERBOSE >= 2);
+
+            if ( $cert->{$_->[0]} eq $cert2->{$_->[1]} ) {
+                print STDERR "Cert1 $_->[0] '$cert->{$_->[0]}' equals Cert2 $_->[1] '$cert2->{$_->[1]}'\n" if $VERBOSE;
+                return 1;
+
+            } else {
+                print STDERR "Cert1 $_->[0] '$cert->{$_->[0]}' NOT equals Cert2 $_->[1] '$cert2->{$_->[1]}'\n" if ($VERBOSE >= 2);
+            }
+
         }
     }
 
