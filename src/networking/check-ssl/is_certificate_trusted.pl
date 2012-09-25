@@ -27,7 +27,7 @@ my $VERBOSE = exists $ENV{VERBOSE} ? $ENV{VERBOSE} : 0;
 #     cert
 # 
 
-die "Usage: $0 certificate ca-certificate-text-dir\n" if @ARGV != 2;
+die "Usage: $0 certificate ca-certificate-text-dir\n\nSet env variable VERBOSE greater than 1 for debugging\n" if @ARGV != 2;
 
 my $CERT = shift @ARGV;
 my $CACERTDIR = shift @ARGV;
@@ -85,10 +85,6 @@ sub main {
 
             # Check if the previous cert is chained to the new one
             foreach my $old ( @old ) {
-                #if ( 
-                #       ( $old->{'auth_key_ident'} eq $tmpissuer->{'subj_key_ident'} )
-                #    or ( $old->{'issuer'} eq $tmpissuer->{'subject'} )
-                #) {
 
                 if ( certs_linked( $tmpissuer, $old ) ) {
 
@@ -118,24 +114,9 @@ sub main {
     foreach my $old (@old) {       
 
         foreach my $ca ( @cacerts ) {
-            #if (
-            #    defined $old->{'auth_key_ident'} and length $old->{'auth_key_ident'}
-            #    and defined $ca->{'subj_key_ident'} and length $ca->{'subj_key_ident'}
-            #    and $old->{'auth_key_ident'} eq $ca->{'subj_key_ident'}
-            #) {
 
             if ( certs_linked( $ca, $old ) ) {
                 $match_ca = 1;
-                print STDERR "Issuer auth key matches CA subj key: $old->{'auth_key_ident'}\n" if $VERBOSE;
-            }
-
-            if (
-                defined $old->{'issuer'} and length $old->{'issuer'}
-                and defined $ca->{'subject'} and length $ca->{'subject'}
-                and $old->{'issuer'} eq $ca->{'subject'}
-            ) {
-                $match_ca += 2;
-                print STDERR "Issuer text matches CA text: $old->{'issuer'}\n" if $VERBOSE;
             }
 
             if ( $match_ca ) {
