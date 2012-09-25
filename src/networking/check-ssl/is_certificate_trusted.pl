@@ -174,7 +174,7 @@ sub download_issuer {
 
     }
 
-    $data = load_certificate($data);
+    $data = load_certificate($data, $uri);
 
     return read_cert_text($data);
 }
@@ -201,7 +201,8 @@ sub load_data {
 # Converts it to text if it's in PEM or DAR format.
 sub load_certificate {
     my $file = shift;
-    my ($inform, $data);
+    my $uri = shift;
+    my ($inform, $data, $fmt);
     
     if ( ref($file) ne "ARRAY" and -f $file ) {
         $data = load_data($file);
@@ -209,9 +210,26 @@ sub load_certificate {
         $data = $file;
     }
 
+    if ( defined $uri and length $uri ) {
+        if ( $uri =~ /\.p7[bc]$/i ) {
+            $fmt = "pkcs7";
+        } elsif ( $uri =~ /\.(p12|pfx)$/i ) {
+            $fmt = "pkcs12";
+        } else {
+            $fmt = "x509";
+        }
+    }
+
     if ( $data->[0] =~ /^Certificate:/ ) {
         # If it's already been converted to text
         undef $inform;
+    } elsif ( grep(/BEGIN PKCS(7|12)/, @$data) ) {
+        $inform = "PEM";
+        if ( $1 eq "7" ) {
+            $fmt = "pkcs7";
+        } elsif ( $1 eq "12" ) {
+            $fmt = "pkcs12";
+        }
     } elsif ( grep(/BEGIN CERTIFICATE/, @$data) ) {
         # PEM format
         $inform = "PEM";
@@ -225,7 +243,17 @@ sub load_certificate {
 
         print "Decoding $inform certificate data\n" if $VERBOSE;
 
-        my $pid = open2(my $readfd, my $writefd, "openssl x509 -noout -text -inform $inform") || die "Error: cannot open openssl: $!";
+        my $readcmd;
+        
+        if ( !defined $fmt or $fmt eq "x509" ) {
+            $readcmd = "openssl x509 -noout -text -inform $inform";
+        } elsif ( $fmt eq "pkcs12" ) {
+            $readcmd = "openssl pkcs12 -cacerts -nokeys -inform $inform | openssl x509 -noout -text";
+        } elsif ( $fmt eq "pkcs7" ) {
+            $readcmd = "openssl pkcs7 -inform $inform -noout -text -print_certs";
+        }
+
+        my $pid = open2(my $readfd, my $writefd, "$readcmd") || die "Error: cannot open openssl: $!";
 
         print $writefd join("", @$data);
         close($writefd);
