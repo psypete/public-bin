@@ -1,5 +1,5 @@
 #!/usr/bin/perl -w
-# simplecfm v0.1 - a really simple configuration management system
+# simplecfm v0.2 - a really simple configuration management system
 # Copyright (C) 2012 Peter Willis <peterwwillis@yahoo.com>
 
 $|=1;
@@ -63,7 +63,7 @@ exit(0);
 
 sub usage {
     die <<EOF;
-Simple Configuration Manager, version 0.1
+Simple Configuration Manager, version 0.2
 Usage: $0 [OPTIONS] FILE [..]
 Automates configuration of system by interpreting an scfm FILE.
 
