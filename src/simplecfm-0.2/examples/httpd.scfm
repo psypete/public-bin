@@ -1,0 +1,38 @@
+# Example to tune httpd.conf
+
+# 
+# Variables!
+
+ROOT=/home/psypete/test-scfm-dir
+MODULES_TO_INCLUDE=authz_user_module authz_groupfile_module authz_owner_module authz_default_module auth_basic_module auth_digest_module status_module autoindex_module info_module cgi_module
+SERVER_ADMIN="root@syw4e.info"
+SERVER_USER="apache"
+SERVER_GROUP="apache"
+
+makedir --mode 0750 ${ROOT}/etc/httpd
+
+# Copy baseline httpd.conf config
+copy -t ${ROOT}/etc/httpd/httpd.conf.scfm files/httpd.conf
+
+# Uncomment the modules we want to use
+foreach MODULE in ${MODULES_TO_INCLUDE}
+
+    # We could use 'sed -i -e', but not all operating systems' sed implementation supports
+    # the '-i' option and I like being portable. ish.
+    run sed -e "s/^#LoadModule ${MODULE}/LoadModule ${MODULE}/g" ${ROOT}/etc/httpd/httpd.conf.scfm > ${ROOT}/etc/httpd/httpd.conf.scfm.new
+    move -t ${ROOT}/etc/httpd/httpd.conf.scfm ${ROOT}/etc/httpd/httpd.conf.scfm.new
+
+done
+
+# Change ServerAdmin
+run sed -i -e "s/^ServerAdmin .*/ServerAdmin ${SERVER_ADMIN}/g" ${ROOT}/etc/httpd/httpd.conf.scfm
+
+# Change server user/group
+run sed -i -e "s/^User .*/User ${SERVER_USER}/g; s/^Group .*/Group ${SERVER_GROUP}/g" ${ROOT}/etc/httpd/httpd.conf.scfm
+
+# Enable MMap and SendFile
+run sed -i -e "s/^.*EnableMMAP off/EnableMMAP on/g; s/^.*EnableSendfile off/EnableSendfile on/g" ${ROOT}/etc/httpd/httpd.conf.scfm
+
+# Enable httpd info
+run sed -i -e "s/^#Include \(\/etc\/httpd\/extra\/httpd-info\.conf\)/Include \1/g" ${ROOT}/etc/httpd/httpd.conf.scfm
+

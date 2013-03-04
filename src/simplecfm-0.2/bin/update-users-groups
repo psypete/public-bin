@@ -1,0 +1,128 @@
+#!/usr/bin/perl
+# update-users-groups - maintains user and group accounts
+# Copyright (C) 2012 Peter Willis <peterwwillis@yahoo.com>
+
+use strict;
+use Getopt::Long;
+my $VERBOSE = 0;
+my $RETURN = 0;
+
+my %OPTS = ( 'verbose' => \$VERBOSE );
+GetOptions( \%OPTS, "users=s", "groups=s", "verbose", "dry-run" );
+
+if ( !exists $OPTS{'groups'} and !exists $OPTS{'users'} ) {
+    die <<EOF;
+Usage: $0 OPTIONS
+
+Options:
+  --users USERS                 A space-separated list of users to add. Each username may have an
+                                optional user id inside square brackets at the end of the username.
+                                Example: "someuser[1234]"
+  --groups GROUPS               A list just like the users above except after the optional group id
+                                you can add a colon and a comma-separated list of users to add to
+                                the group. Example:"somegroup group2:usera group3[1234]:blah,blah2"
+EOF
+}
+
+main();
+exit($RETURN);
+
+sub main {
+    add_users($OPTS{'users'});
+    add_groups($OPTS{'groups'});
+}
+
+sub add_groups {
+    my @groups = split(/\s+/, shift @_);
+    
+    foreach my $group ( @groups ) {
+        if ( $group =~ /^(\w+)(?:\[(\d+)\])?(?::(.+))?$/ ) {
+            my ($gn, $gnid, @users) = ( $1, $2, (defined $3 ? split(/,\s*?/, $3) : ()) );
+            print STDERR "gn $gn gnid $gnid users " . join("-",@users) . "\n" if $VERBOSE;
+
+            if ( defined $gnid and length $gnid ) {
+                my @gr = getgrgid($gnid);
+                if ( @gr and $gr[0] ne $gn ) {
+                    die "Error: existing group id $gnid does not match expected group name $gn";
+                }
+            }
+
+            my @gr = getgrnam($gn);
+            if ( ! @gr ) {
+                groupadd( $gn, $gnid );
+            }
+
+            foreach my $user ( @users ) {
+                update_group( $user, $gn );
+            }
+        }
+    }
+}
+
+sub groupadd {
+    my ($group, $id) = @_;
+
+    my $cmd = "groupadd";
+    $cmd .= " -g $id" if ( defined $id and length $id );
+    $cmd .= " $group";
+    runit($cmd);
+}
+
+sub useradd {
+    my ($user, $id) = @_;
+
+    my $cmd = "useradd";
+    $cmd .= " -g $id" if ( defined $id and length $id );
+    $cmd .= " $user";
+    runit($cmd);
+}
+
+sub update_group {
+    my ($user, $group) = @_;
+
+    my @ur = getpwnam($user);
+    if ( ! @ur ) {
+        die "Error: user $user does not exist";
+    }
+    my @user_groups = split(/\s+/, `groups $user`);
+    chomp @user_groups;
+    shift @user_groups;
+    shift @user_groups;
+    my %groups = map { $_ => 1 } @user_groups;
+    $groups{$group}++;
+
+    runit("usermod -G " . join(",", keys %groups) . " $user");
+}
+
+sub add_users {
+    my @users = split(/\s+/, shift @_);
+
+    foreach my $user ( @users ) {
+        if ( $user =~ /^(\w+)(?:\[(\d+)\])?$/ ) {
+            my ($un, $uid) = ( $1, $2 );
+            print STDERR "un $un uid $uid\n" if $VERBOSE;
+
+            if ( defined $uid and length $uid ) {
+                my @ur = getpwuid($uid);
+                if ( @ur and $ur[0] ne $un ) {
+                    die "Error: uid $uid does not match expected name $un";
+                }
+            }
+
+            my @ur = getpwnam($un);
+            if ( ! @ur ) {
+                useradd($un, $uid);
+            }
+        }
+    }
+}
+
+sub runit {
+    my @cmds = @_;
+    print STDERR "Running: '@cmds'\n" if $VERBOSE;
+    if ( !defined $OPTS{'dry-run'} ) {
+        system(@cmds);
+        $RETURN++ if ( ($? >> 8) != 0 );
+    }
+}
+

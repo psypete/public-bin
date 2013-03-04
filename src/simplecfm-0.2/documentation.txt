@@ -1,0 +1,107 @@
+the point of simplecfm is to be a KISS solution to configuration management.
+
+objectives:
+  * easy application of configuration
+  * easy hackable
+  * easy to learn
+  * nothing fancy, everything in a single man page
+  * no programming required
+  * no magic
+  * ability to provide verbose output for troubleshooting
+
+implementation:
+  * configuration file specifies what to do
+  * similar to shell scripting except uses natural language so you don't need to know bash
+  * predefined variables for different environments, paths, users etc
+  * simple operations only
+    - i/o: copy, delete, move, truncate, append, mkdir
+      - default to rsync for all copying
+    - scripting: execute any script/app, exporting environment vars or passing to stdin
+    - change ownership/permissions
+  * default locking for local and remote operations, but locks exist locally only (FIXME)
+  * works both as a single-run instance and continuted deployment
+  * pulls or pushes configuration
+  * support including more scfm files as specified
+  * support backticks
+  * by default works out of the directory of each scfm file it interprets
+  * support file globbing (TODO)
+  * PATH references built-in 'bin' path first, for internal tools' use
+
+syntax:
+  * don't use unnecessary punctuation like semicolons; separate by new lines
+  * support variables (FIXME)
+    - to begin support only '${NAME}' type variables, probably easier to understand
+    - arrays not explicitly supported; just put stuff separated by spaces or newlines in variables
+    - set variables on a line with 'KEY=VALUE' or with --import using 'run' action
+  * support comments using pound symbol ('# something')
+  * support multiple operations over a list
+    - format:
+          foreach ITEM in ${SSH_CONFIG_FILES_LIST}
+            run sed -e 's/value1/value2/g' ${ITEM} > ${ITEM}.new
+            append --to ${HOME}/.ssh/config ${ITEM}.new
+            delete ${ITEM}.new
+          done
+  * support if-then statements
+    - format:
+          if `echo ${HOSTNAME} | grep -qe "\.dev\.la$" && echo 1` is "1"
+            include configs/network/la/dev/main.scfm
+          done
+
+          if ${HOSTNAME} isnt "syw4e.info"
+            copy sfcm@syw4e.info:sfcm/trunk/ --to .
+            run ifconfig lo:2 127.0.0.2
+          done
+
+language:
+  * copy
+    - usage: copy [options] FILES
+    - by default the directory that the copy operation works from is the same directory that the
+      script is being run from, typically a temp work directory.
+    - options:
+      --no-recurse             - Do not copy recursively. Default is recursive.
+      --no-backup              - Specifies not to back up files on the destination which are newer
+                                 than the source. By default backs up everything and overwrites
+                                 the destination with the source into temp work dir.
+      --local                  - Only does local file operations.
+      --to ARGUMENT            - The destination to copy to. No default. Mandatory.
+      --mode MODE              - Mode of the file (or files) to copy of the chmod(1) format (not
+                                 the octal format)
+  * makedir
+    - usage: makedir [options] DIRECTORY [..]
+    - options:
+      --mode MODE
+      --no-parents
+  * delete
+    - usage: delete [optons] FILE [..]
+    - options:
+      --no-recurse             - Do not delete recursively. Default is recursive.
+  * move
+    - usage: move [options] FILES
+    - options:
+      --to ARGUMENT            - The destination to move to. No default. Mandatory.
+  * append
+    - usage: append [options] ARGUMENTS
+    - options:
+      --to ARGUMENT            - The destination to append to
+      --files                  - Specifies that the arguments to append are files and not strings
+  * run
+    - usage: run [options] EXECUTABLE [ARGUMENTS ..]
+    - options:
+      --error                   - Causes scfm to exit with an error if the program has a non-zero
+                                  return status
+      --import                  - Will read the output of the program and put any KEY=VALUE pairs
+                                  into the internal variable data structure
+  * include
+    - usage: include SCFM_FILE
+  * permissions
+    - usage: permissions [options] PERMISSIONS FILE [..]
+    - arguments:
+      --recurse                 - Applies permissions to FILEs recursively. Default is disabled
+      PERMISSIONS               - Standard MODE or OCTAL as provided to chmod(1)
+  * ownership
+    - usage: ownership [options] [OWNER][:[GROUP]] FILE [..]
+    - arguments:
+      --recurse                 - Applies ownership to FILEs recursively. Default is disabled
+      [OWNER][:[GROUP]]         - Owner and/or group as provided to chown(1)
+      FILE                      - One or more files or directories to apply ownership to
+

@@ -1,0 +1,17 @@
+# Example to tune the system
+
+# Variables!
+ROOT=/home/psypete/test-scfm-dir
+USERS=psypete
+GROUPS=floppy:psypete audio:psypete video:psypete cdrom:psypete plugdev:psypete power:psypete netdev:psypete psypete:psypete kvm[221] grs_sockserv[994] grs_sockcli[995] grsec_sockall[996] grsec_tpe[997]:psypete grsec_audit[998]
+
+makedir ${ROOT}/etc/rc.d
+
+# Install firewall rules
+copy --mode 0755 --to ${ROOT}/etc/rc.d/rc.firewall files/rc.firewall
+copy --mode 600 --to ${ROOT}/etc/iptables.conf files/iptables.conf
+copy --mode 0600 --to ${ROOT}/etc/ip6tables.conf files/ip6tables.conf
+
+# Update users and groups
+# Runs a script to modify the settings more intelligently than scfm can do by itself
+run update-users-groups --users "${USERS}" --groups "${GROUPS}"

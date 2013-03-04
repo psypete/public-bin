@@ -1,0 +1,1152 @@
+#!/usr/bin/perl -w
+# simplecfm v0.1 - a really simple configuration management system
+# Copyright (C) 2012 Peter Willis <peterwwillis@yahoo.com>
+
+$|=1;
+use strict;
+use Getopt::Long qw(GetOptionsFromArray GetOptionsFromString);
+use Text::ParseWords;
+use Cwd qw(abs_path);
+# use File::Spec 'rel2abs';
+use POSIX;
+
+my $VERBOSE = exists $ENV{VERBOSE} ? $ENV{VERBOSE} : 0;
+my %VARIABLES = %ENV;
+my %OPTS = ( 'dry-run' => undef, 'verbose' => \$VERBOSE );
+my $HOME = (getpwuid($<))[7];
+
+# Add $0's path plus "/bin" to path, to allow contributed commands to run first
+# FIXME: only add this if the directory is owned by the same user as $0
+my $cmd_path = abs_path($0);
+$cmd_path =~ s/\/[^\/]+$//;
+if ( -d "$cmd_path/bin" ) {
+    $ENV{PATH} = "$cmd_path/bin:$ENV{PATH}";
+}
+
+##################################################################################################
+##################################################################################################
+
+my $r = GetOptions( \%OPTS, "dry-run", 'distfiles=s', 'verbose', 'help', 'no-cd', 'pid=s', "interval=i", "su=s" );
+
+# For the commands' Getopt use, make sure it's after the GetOptions above
+Getopt::Long::Configure( "pass_through" );
+
+usage() if ( ! @ARGV or exists $OPTS{'help'} );
+
+# Set some defaults
+if ( !defined $OPTS{'distfiles'} ) {
+    $OPTS{'distfiles'} = getcwd;
+}
+
+if ( defined $OPTS{'su'} and length $OPTS{'su'} ) {
+    my @user = ( $OPTS{'su'} =~ /^\d+$/ ? getpwuid($OPTS{'su'}) : getpwnam($OPTS{'su'}) );
+    undef $!;
+    POSIX::setgid( $user[3] );
+    die "$0: Error: setting gid to $user[3]: $!" if (defined $! and length $!);
+    undef $!;
+    POSIX::setuid( $user[2] );
+    die "$0: Error: setting uid to $user[2]: $!" if (defined $! and length $!);
+
+    $HOME = (getpwuid($<))[7];
+}
+
+if ( !defined $OPTS{'pid'} ) {
+    $OPTS{'pid'} = "$HOME/.simplecfm.pid";
+}
+
+main();
+exit(0);
+
+
+##################################################################################################
+##################################################################################################
+
+sub usage {
+    die <<EOF;
+Simple Configuration Manager, version 0.1
+Usage: $0 [OPTIONS] FILE [..]
+Automates configuration of system by interpreting an scfm FILE.
+
+Options:
+  -i,--interval TIME          Re-interpret scfm file every TIME seconds
+     --no-cd                  Don't change directory to that of the scfm file
+     --dry-run                Does not perform any actions
+  -s,--su USER                Change to USER before interpreting anything
+  -p,--pid FILE               Pid file to use (default: $ENV{HOME}/.simplecfm.pid)
+  -v,--verbose                More detailed output
+  -h,--help                   This text
+EOF
+}
+
+sub main {
+    my $mode = ( -r $OPTS{'pid'} ? "+<" : "+>" );
+    open(my $pid, "$mode $OPTS{'pid'}") || die "Error: could not open pid file $OPTS{pid} read-write: $!";
+    plock($pid, 2);
+
+    foreach my $arg ( @ARGV ) {
+        my $s = {};
+        my $myarg = abs_path($arg);
+
+        print STDERR "$0: Interpreting $myarg\n" if $VERBOSE;
+        interpret_scfm($s, $myarg);
+        print STDERR "$0: Done interpreting\n" if $VERBOSE;
+    }
+
+    plock($pid, 8);
+}
+
+sub interpret_scfm {
+    my $s = shift;
+    my $file = shift;
+
+    # Copy global variables into object
+    if ( !exists $s->{'variables'} ) {
+        $s->{'variables'} = { %VARIABLES };
+    }
+
+    $s->{'directory'} = abs_path($file);
+    $s->{'directory'} =~ s/\/[^\/]+$//g;
+
+    my $olddir = getcwd;
+    if ( !defined $OPTS{'no-cd'} ) {
+        chdir($s->{'directory'}) || die "Error: could not change to directory \"$s->{directory}\": $!";
+    }
+
+    open(my $fd, "<$file") || die "Error: could not interpret $file: $!\n";
+    parse_scfm($s, $fd);
+    close($fd);
+
+    if ( !defined $OPTS{'no-cd'} ) {
+        chdir($olddir) || die "Error: could not change back to old directory \"$olddir\": $!";
+    }
+}
+
+sub parse_scfm {
+    my ($self, $fd) = @_;
+    my @lines;
+
+    $self->{'fd'} = $fd;
+    
+    while ( <$fd> ) {
+
+        _parse_scfm_line($self, $_);
+
+        # parent only!
+        if ( exists $self->{'_line_'} and exists $self->{'_line_'}->{'action'} and $self->{'_line_'}->{'action'} eq "su" ) {
+            print STDERR "$0: pid $$: quitting for su\n" if $VERBOSE;
+            last;
+        }
+    }
+}
+
+sub _parse_scfm_line {
+    my ($self, $_) = @_;
+    my @lines;
+
+    # Keep this as the first actions here, so we don't return on an empty value
+    # before we get to delete _line_
+    my $o = $self;
+    delete $o->{'_line_'};
+    $o->{'_line_'} = {};
+    my $line = $o->{'_line_'};
+
+    s/^\s+//g;
+    chomp;
+    return if /^(?:\s*#|\s*$)/;
+
+    if ( process_line($o, $_) ) {
+
+        # Skip processing anything but 'done' action if past conditional failed
+        if ( exists $o->{'conditional'} and $o->{'conditional'} == -1 and $line->{'action'} ne "done" ) {
+            return;
+        }
+
+        my $ret = action($o);
+
+        # return immediately if 'su' was passed, because whether it fails or not we don't want
+        # to continue as the current user parsing this file
+        if ( $o->{'_line_'}->{'action'} eq "su" ) {
+            return;
+
+        # return immediately (issued by do_done() )
+        } elsif ( $ret == -1 ) {
+            #print STDERR "end of if block! $o->{cond}\n";
+            return;
+
+        } elsif ( $ret != 1 ) {
+
+            # 'if' condition failed, so skip everything until 'done'
+            if ( $line->{'action'} eq "if" ) {
+                $o->{'conditional'} = -1;
+            } else {
+                print STDERR "$0: Error: action '$line->{'action'}' failed\n";
+            }
+
+        }
+    }
+}
+
+sub process_line {
+    my $self = shift;
+    $self->{'_line_'} = {} if ( !exists $self->{'_line_'} );
+    my $line = $self->{'_line_'};
+    
+    $line->{'data'} = shift;
+
+    # Hack around backticks
+    #$self->{'_data_'} =~ s/(\`.+?[^\\]\`)/"$1"/g;
+    $line->{'data'} =~ s/(\`.+?[^\\]\`)/"$1"/g;
+
+    #my @stuff = shellwords($line->{'data'});
+    my @stuff = quotewords( '\s+', 1, $line->{'data'} );
+
+    # Set action
+    if ( $stuff[0] =~ /^(copy|run|makedir|delete|move|append|permissions|ownership|if|foreach|run|include|done|su)$/i ) {
+        $line->{'action'} = lc $1;
+        shift @stuff;
+
+    # Match on setting variables
+    } elsif ( ($stuff[0] =~ /^\w+$/ and $stuff[1] eq "=") or $stuff[0] =~ /^(\w+)=(.+)$/ ) {
+        $line->{'action'} = "VARIABLE";
+
+    } else {
+        print STDERR "$0: Error: invalid action \"$stuff[0]\"\n";
+    }
+
+    # Replace variables, do backticks
+    foreach my $thing ( @stuff ) {
+        $thing =~ s/\${([^}]+?)}/exists $self->{'variables'}->{$1} ? $self->{'variables'}->{$1} : "\$\{$1\}"/eg;
+
+        # Execute backticks
+        if ( $thing =~ /^\`(.+)\`$/ ) {
+            chomp($thing = `$1`);
+            #if ( ($? >> 8) != 0 ) {
+            #    print STDERR "$0: Error: backtick command '$1' returned non-zero status\n" if $VERBOSE;
+            #}
+        }
+    }
+
+    # Set variable, return nothing
+    if ( $line->{'action'} eq "VARIABLE" ) {
+        if ( $stuff[0] =~ /^\w+$/ and $stuff[1] eq "=" ) {
+            my $k = shift @stuff;
+            shift @stuff;
+            $self->{'variables'}->{$stuff[0]} = join(" ", @stuff);
+        } else {
+            my $stuff = join(" ", @stuff);
+            if ( $stuff =~ /^(\w+)=(.+)$/ ) {
+                #print STDERR "setting variable variables{$1} = $2\n";
+                $self->{'variables'}->{$1} = $2;
+            } else {
+                print STDERR "$0: Error: invalid variable-setting line \"$stuff\"\n";
+            }
+        }
+
+        return;
+    }
+
+    $line->{'list'} = \@stuff;
+        
+    return $self;
+}
+
+sub action {
+    my $s = shift;
+    my %hand = (
+        "if" => \&do_if,
+        "done" => \&do_done,
+        "include" => \&do_include,
+        "foreach" => \&do_foreach,
+        "copy" => \&do_copy,
+        "makedir" => \&do_makedir,
+        "delete" => \&do_delete,
+        "move" => \&do_move,
+        "run" => \&do_run,
+        "append" => \&do_append,
+        "permissions" => \&do_permissions,
+        "ownership" => \&do_ownership,
+        "su" => \&do_su
+    );
+
+    my $ac = lc $s->{'_line_'}->{'action'};
+
+    if ( exists $hand{ $ac } ) {
+        my $ref = $hand{ $ac };
+        print STDERR "$0: Action $ac\n" if $VERBOSE;
+        my $ret = &$ref($s);
+        return $ret;
+    }
+
+    die "$0: Error: Action $ac has no handler\n";
+}
+
+sub do_include {
+    my $s = shift;
+    my $file = $s->{'_line_'}->{'list'}->[0];
+    my $myfile = abs_path($file);
+
+    print STDERR "$0: Include $myfile\n" if $VERBOSE;
+    interpret_scfm($s, $myfile);
+
+    return 1;
+}
+
+sub do_foreach {
+    my $s = shift;
+    my $line = $s->{'_line_'};
+
+    $s->{'conditional'} = 1;
+
+    my $oldcond = $s->{'cond'}++;
+    my $a = $line->{'list'};
+
+    if ( $a->[1] ne "in" ) {
+        print STDERR "$0: Error: foreach format is invalid\n";
+        return 0;
+    }
+
+    # the 'ITEM' in 'foreach ITEM list1 list2 list3'
+    my $varname = shift @$a;
+    # 'in'
+    shift @$a;
+
+    my @items = split(/\s+/, $a->[0]);
+
+    # So now we do an ugly thing and just keep reading the $fd until we get to a 'done',
+    # at which point we'll stop, set the foreach variable, and interpret everything we read.
+    my $fd = $s->{'fd'};
+    my @list;
+    my $condcount = 0;
+
+    while ( <$fd> ) {
+        chomp;
+        s/^\s+//g;
+        s/\s+$//g;
+        next if /^(#|\s*$)/;
+
+        if ( /^(if|foreach)\s+/ ) {
+            $condcount++;
+        } elsif ( /^done$/i ) {
+            if ( $condcount == 0 ) {
+                last;
+            }
+            $condcount--;
+        }
+
+        push(@list, $_);
+    }
+
+    foreach my $item ( @items ) {
+        #print STDERR "processing ITEM $item\n";
+        # set varname to $item
+        # parse @line
+        $s->{'variables'}->{$varname} = $item;
+        for ( @list ) {
+            #print STDERR "processing list item $_\n";
+            _parse_scfm_line($s, $_);
+        }
+    }
+
+    print STDERR "$0: End of foreach\n" if $VERBOSE;
+    $s->{'cond'}--;
+
+    if ( $s->{'cond'} != $oldcond ) {
+        print STDERR "cond $s->{cond} oldcond $oldcond\n";
+        print STDERR "$0: Error: Foreach did not terminate successfully\n";
+        return 0;
+    }
+
+    return 1;
+}
+
+sub do_if {
+    my $s = shift;
+    my $line = $s->{'_line_'};
+
+    if ( $VERBOSE ) {
+        print STDERR "$0: If data '".$line->{'data'}."'\n" if $VERBOSE;
+    }
+
+    $s->{'conditional'} = 1;
+
+    my $oldcond = $s->{'cond'}++;
+    my $a = $line->{'list'};
+
+    if ( $a->[1] !~ /^(?:is|isnt)$/ ) {
+        print STDERR "$0: Error: 'if' action does not include a proper 'is' argument\n";
+        return 0;
+    } elsif ( $a->[1] eq "is" and ($a->[0] ne $a->[2]) ) {
+        print STDERR "$0: if test \"$a->[0]\" not equals \"$a->[2]\"; failing\n" if $VERBOSE;
+        return 0;
+    } elsif ( $a->[1] eq "isnt" and ($a->[0] eq $a->[2]) ) {
+        print STDERR "$0: if test \"$a->[0]\" equals \"$a->[2]\"; failing\n" if $VERBOSE;
+        return 0;
+    }
+
+    print STDERR "$0: If succeeded.\n" if $VERBOSE;
+
+    parse_scfm($s, $s->{'fd'});
+
+    if ( $s->{'cond'} != $oldcond ) {
+        print STDERR "$0: Error: If did not terminate successfully\n";
+        return 0;
+    }
+
+    return 1;
+}
+
+sub do_done {
+    my $s = shift;
+
+    # This hash element should only exist 
+    $s->{'conditional'} = 0;
+
+    if ( !exists $s->{'cond'} ) {
+        print STDERR "$0: Error: 'done' found but no previous conditional\n";
+        return 0;
+    }
+
+    $s->{'cond'}--;
+
+    # tells parse_scfm to return immediately
+    return -1;
+}
+
+sub do_copy {
+    my $s = shift;
+    my ($norecurse, $nobackup, @files, $to, $local, $mode);
+
+    my $r = GetOptionsFromArray( $s->{'_line_'}->{'list'}, "no-recurse" => \$norecurse, "no-backup" => \$nobackup, "to=s" => \$to, "local" => \$local, "mode=s" => \$mode );
+
+    @files = @{$s->{'_line_'}->{'list'}};
+    
+    if ( !defined $to or length $to < 1 ) {
+        die "$0: Error: missing '--to'";
+    } elsif ( @files < 1 ) {
+        die "$0: Error: missing files to copy";
+    }
+
+    #print STDERR "$0: Copy options: norecurse $norecurse nobackup $nobackup local $local mode $mode\n";
+    print STDERR "$0: Copying the following files to $to: @files\n" if $VERBOSE;
+
+    # Die if --mode and --local specified, cuz cp doesn't support it (lame)
+    # Nevermind... we support it now, pretty much
+    #die "$0: Error: copy does not support --mode and --local at the same time" if (defined $mode and defined $local);
+
+    # arcfour is very fast, arcfour256 might be more secure
+    my @cmd = defined $local ? qw(cp) : ("rsync", "-e", "ssh -c arcfour256");
+    push(@cmd, "-r") unless (defined $norecurse);
+    push(@cmd, "-ltgoDz") unless (defined $local);
+    # Always try to preserve permissions; can't hurt?
+    push(@cmd, "-p");
+    push(@cmd, "-b") unless (defined $nobackup);
+    # Pass --chmod to rsync, if mode is non-octal and --local wasn't passed
+    push(@cmd, "--chmod=$mode") if (defined $mode and $mode !~ /^\d+$/ and !defined $local);
+    push(@cmd, @files);
+    push(@cmd, $to);
+    my $ret = runcmd($s, \@cmd);
+
+    # try to handle octal permissions if passed or --local was passed
+    my @ret2;
+    if ( (defined $local and defined $mode) or (defined $mode and $mode =~ /^\d+$/) ) {
+        @cmd = ("chmod", $mode);
+        my @filestocheck;
+        
+        # Handle recursively-copied directories as well as we can
+        if ( -d $to ) {
+            foreach my $file ( @files ) {
+
+                # Ugly; should probably be using File::Spec
+                my $leaddir = $file;
+                $leaddir =~ s/\/$//g;
+                $leaddir =~ s/^(.*\/)[^\/]+$/$1/g;
+
+                # Soooo we have to now make a list of allll these files if it was a
+                # recursive copy, and set the perms on the destination for those files...
+                if ( -d $file and !defined $norecurse ) {
+                    my $foundfiles = recursive_find($s, $file);
+                    push(@filestocheck, map { s/^$leaddir//g; "$to/$_" } @$foundfiles );
+
+                #} elsif ( -f $file ) {
+                } else {
+                    my $newfile = $file;
+                    $newfile =~ s/^$leaddir//g;
+                    push(@filestocheck, "$to/$newfile");
+                }
+
+            }
+        } elsif ( -f $to ) {
+            push(@filestocheck, $to);
+        }
+
+
+        # Check if the permission is already set
+        foreach my $newfile ( @filestocheck ) {
+            my $m = sprintf("%04o", (stat($newfile))[2] & 07777);
+            $m = substr($m, 1) if (length $mode < 4); # "0750" becomes "750"
+            if ( $m ne $mode ) {
+                #print STDERR "$0: Permission $m (mode $mode) not already set\n";
+                push @ret2, runcmd($s, [@cmd, $newfile]);
+            }
+            # else {
+            #    print STDERR "$0: Permission $m (mode $mode) already set\n";
+            #}
+        }
+    }
+
+    my $ret2 = 1;
+    map { $ret2 = 0 if ($_ != 1) } @ret2;
+
+    return( $ret && $ret2 );
+}
+
+# Ugh.
+sub recursive_find {
+    my $s = shift;
+    my @tmp = @_;
+    my @found;
+
+    while ( @tmp ) {
+        my @tmp2 = @tmp;
+        @tmp = ();
+
+        foreach my $f (@tmp2) {
+            my $fd;
+            push(@found, $f);
+
+            if ( ! opendir($fd, $f) ) {
+                print STDERR "$0: Error: couldn't open dir \"$f\": $!";
+                next;
+            }
+
+            while ( my $f2 = readdir($fd) ) {
+                next if ( $f2 =~ /^\.\.?$/ );
+
+                if ( -d "$f/$f2" ) {
+                    push(@tmp, "$f/$f2");
+                } elsif ( -f _ ) {
+                    push(@found, "$f/$f2");
+                }
+            }
+
+            closedir($fd);
+        }
+
+    }
+
+    return \@found;
+}
+
+sub do_makedir {
+    my $s = shift;
+    my ($mode, $parents);
+    my $r = GetOptionsFromArray( $s->{'_line_'}->{'list'}, "mode=s" => \$mode, "no-parents" => \$parents );
+    my $worked = 1;
+
+    my @cmd = qw(mkdir);
+    push(@cmd, "-p") unless (defined $parents);
+    push(@cmd, "-m", $mode) if (defined $mode);
+
+    my @dirs;
+    foreach my $dir ( @{$s->{'_line_'}->{'list'}} ) {
+        if ( -d $dir ) {
+            print STDERR "$0: Warning: directory $dir already exists\n" if $VERBOSE;
+            if ( defined $mode ) {
+                if ( ! runcmd( $s, [ "chmod", $mode, $dir ] ) ) {
+                    $worked = 0;
+                }
+            }
+        } else {
+            push(@dirs, $dir);
+        }
+    }
+
+    if ( @dirs ) {
+        if ( ! runcmd($s, [ @cmd, @dirs ]) ) {
+            $worked = 0;
+        }
+    }
+    
+    return $worked;
+}
+
+sub do_delete {
+    my $s = shift;
+    my $norecurse;
+    my $r = GetOptionsFromArray( $s->{'_line_'}->{'list'}, "no-recurse" => \$norecurse );
+
+    my @cmd = qw(rm);
+    push(@cmd, "-R") unless (defined $norecurse);
+
+    foreach my $file ( @{$s->{'_line_'}->{'list'}} ) {
+        if ( ! -e $file ) {
+            print STDERR "$0: Error: file $file does not exist\n";
+        }
+    }
+
+    push(@cmd, @{$s->{'_line_'}->{'list'}});
+    return runcmd($s, \@cmd);
+}
+
+sub do_move {
+    my $s = shift;
+    my $to;
+    my $r = GetOptionsFromArray( $s->{'_line_'}->{'list'}, "to=s" => \$to );
+
+    my @cmd = qw(mv);
+
+    if ( !defined $to or length $to < 1 ) {
+        die "$0: Error: missing '--to'";
+    } elsif ( @{ $s->{'_line_'}->{'list'} } < 1 ) {
+        die "$0: Error: missing files to move";
+    }
+
+    foreach my $dir ( @{$s->{'_line_'}->{'list'}} ) {
+        if ( -d $dir ) {
+            print STDERR "$0: Error: directory $dir already exists\n";
+            return 0;
+        }
+    }
+
+    push(@cmd, @{$s->{'_line_'}->{'list'}});
+    push(@cmd, $to);
+    return runcmd($s, \@cmd);
+}
+
+sub do_append {
+    my $s = shift;
+    my ($to, $files);
+    my $r = GetOptionsFromArray( $s->{'_line_'}->{'list'}, "to=s" => \$to, "files" => \$files );
+
+    if ( !defined $to or length $to < 1 ) {
+        die "$0: Error: missing '--to'";
+    } elsif ( @{ $s->{'_line_'}->{'list'} } < 1 ) {
+        die "$0: Error: missing arguments to append";
+    }
+
+    my $args = join( " ", @{ $s->{'_line_'}->{'list'} } );
+
+    print STDERR "$0: " . (defined $OPTS{'dry-run'} ? "Dry-append" : "Appending") . "to '$to': '$args'\n" if $VERBOSE;
+    return 1 if (defined $OPTS{'dry-run'});
+
+    open(my $fh, ">>$to") || die "Error: could not append to $to: $!";
+
+    # append files if --files, otherwise just append $args
+    if ( defined $files ) {
+
+        foreach my $file ( @{ $s->{'_line_'}->{'list'} } ) {
+            open(my $from, "<$file") || die "Error: couldnt open file $file: $!";
+            print $fh join("", <$from>);
+            close($from);
+        }
+
+    } else {
+        print $fh $args;
+    }
+
+    close($fh);
+
+    return 1;
+}
+
+sub do_permissions {
+    my $s = shift;
+    my $recursive;
+    my $r = GetOptionsFromArray( $s->{'_line_'}->{'list'}, "recurse" => \$recursive );
+    my $permissions = shift @{$s->{'_line_'}->{'list'}};
+
+    my @cmd = qw(chmod);
+    push(@cmd, "-R") if (defined $recursive);
+    push(@cmd, $permissions);
+
+    foreach my $file ( @{$s->{'_line_'}->{'list'}} ) {
+        if ( ! -e $file ) {
+            print STDERR "$0: Error: file '$file' does not exist\n";
+            return 0;
+        }
+    }
+
+    push(@cmd, @{$s->{'_line_'}->{'list'}});
+    return runcmd($s, \@cmd);
+}
+
+sub do_ownership {
+    my $s = shift;
+    my $recursive;
+    my $r = GetOptionsFromArray( $s->{'_line_'}->{'list'}, "recurse" => \$recursive );
+    my $ownership = shift @{$s->{'_line_'}->{'list'}};
+
+    my @cmd = qw(chown);
+    push(@cmd, "-R") if (defined $recursive);
+
+    foreach my $file ( @{$s->{'_line_'}->{'list'}} ) {
+        if ( ! -e $file ) {
+            print STDERR "$0: Error: file '$file' does not exist\n";
+            return 0;
+        }
+    }
+
+    push(@cmd, @{$s->{'_line_'}->{'list'}});
+    return runcmd($s, \@cmd);
+}
+
+sub do_su {
+    my $s = shift;
+    my $user = $s->{'_line_'}->{'list'}->[0];
+
+    print STDERR "$0: Changing to user $user\n" if $VERBOSE;
+
+    my @user = ( $user =~ /^\d+$/ ? getpwuid($user) : getpwnam($user) );
+    my $pid = fork();
+
+    # Parent
+    if ( $pid > 0 ) {
+
+        while ( my $ret = wait() ) {
+            if ( $ret != -1  ) {
+                select(undef, undef, undef, 0.1);
+            } else {
+                last;
+            }
+        }
+
+    } elsif ( $pid == 0 ) {
+
+        undef $!;
+        POSIX::setuid( $user[2] );
+        die "$0: Error: setting uid to $user[2]: $!" if (defined $!);
+        undef $!;
+        POSIX::setgid( $user[3] );
+        die "$0: Error: setting gid to $user[3]: $!" if (defined $!);
+
+        parse_scfm($s, $s->{'fd'});
+
+        exit(0);
+    }
+
+    print "pid $pid \$\$ $$\n";
+
+    return 1;
+}
+
+sub do_run {
+    my $s = shift;
+    my ($import, $error);
+    #my $r = GetOptionsFromArray( $s->{'_line_'}->{'list'}, "import" => \$import, "error" => \$error );
+    my @cmd = @{ $s->{'_line_'}->{'list'} };
+    my (@cmd2, $i);
+
+    # This is ghetto, but handle options manually instead of GetOptionsFromArray, so it doesn't
+    # interpret "sed -e blah" as the --error option and we don't have to force people to pass the
+    # '--' to delineate the end of options
+    
+    while ( @cmd ) {
+        if ( $cmd[0] eq "--error" ) {
+            $error++;
+            shift @cmd;
+        } elsif ( $cmd[0] eq "--import" ) {
+            $import++;
+            shift @cmd;
+        } else {
+            last;
+        }
+    }
+
+#    for ( $i=0; $i < @cmd; $i++ ) {
+#        if ( lc $cmd[$i] eq "--error" ) {
+#            $error++;
+#        } elsif ( lc $cmd[$i] eq "--import" ) {
+#            $import++;
+#        } else {
+#            last;
+#        }
+#    }
+    # 
+#    push (@cmd2, @cmd[$i..$#cmd]);
+#    @cmd = @cmd2;
+
+    # Just run it if we haven't specified --import
+    if ( !defined $import ) {
+        my $ret = runcmd($s, [ join(" ", @cmd) ] );
+        if ( defined $error and !$ret ) {
+            die "$0: Error: command failed and --error passed; exiting\n";
+        }
+        return $ret;
+    }
+
+    # These stay here because runcmd() handles the exact same two lines.
+    # If you move this up you'll just have double verbose messages.
+
+    print STDERR "$0: " . (defined $OPTS{'dry-run'} ? "Dry-run" : "Running") . ": @cmd\n" if $VERBOSE;
+    return 1 if ( defined $OPTS{'dry-run'} );
+
+    # We need to take the output and take any key=value pairs and shove them into 'variables'
+    my %ENVCOPY = %ENV;
+    %ENV = %{ $s->{'variables'} };
+
+    # Figure out later if we want to pipe anything to stdin; for now just use %ENV variables
+    open(my $pipe, "@cmd |") || die "Error: could not open pipe: $!";
+    chomp(my @a = <$pipe>);
+    close($pipe);
+
+    if ( defined $error and ! $? ) {
+        die "$0: Error: command failed and --error passed; exiting\n";
+    }
+
+    # Suck any key=val pairs into the internal variables structure
+    # Case sensitive for now
+
+    #while ( @_ = split(/=/, shift @a, 2) ) {
+    #    chomp( $s->{'variables'}->{$_[0]} = $_[1] );
+    #}
+    map {
+        @_=split(/=/,$_,2);
+        chomp( $s->{'variables'}->{$_[0]} = $_[1] ) if (@_ > 1);
+    } @a;
+
+    %ENV = %ENVCOPY;
+
+    return 1;
+}
+
+sub runcmd {
+    my $s = shift;
+    my $cmd = shift;
+
+    print STDERR "$0: " . (defined $OPTS{'dry-run'} ? "Dry-run" : "Running") . ": @$cmd\n" if $VERBOSE;
+    return 1 if ( defined $OPTS{'dry-run'} );
+
+    system(@$cmd);
+    if ( ($? >> 8) != 0 ) {
+        print STDERR "$0: Error running $s->{'_line_'}->{'action'}\n";
+        return 0;
+    }
+
+    return 1;
+}
+
+# File locking not using flock
+sub plock {
+    my $fh = shift;
+    my $op = shift;
+    my $foundme = 0;
+
+    #open(my $fd,"<$ENV{HOME}/.simplecfm.pid") || die "Error: couldnt open pid file: $!";
+    seek($fh, 0, 0);
+    my $pid = <$fh>;
+    chomp $pid if defined $pid;
+
+    if ( defined $pid and length $pid and kill(0, $pid) ) {
+        open(my $fd, "</proc/$$/cmdline") || die "Error: couldnt open cmdline: $!";
+        my @arg = split(/\000/, <$fd>);
+        if ( $arg[1] eq $0 ) {
+            $foundme = 1;
+            print STDERR "$0: Pid found and command matches cmdline name; already running\n" if $VERBOSE;
+        } else {
+            print STDERR "$0: Pid found but cmdline does not match; not locked\n" if $VERBOSE;
+        }
+    } else {
+        print STDERR "$0: Pid not found in lock file; not locked\n" if $VERBOSE;
+    }
+
+    if ( $foundme ) {
+        # LOCK_SH==1,LOCK_EX==2,LOCK_UN==8,LOCK_NB=4
+        if ( $op == 2 ) {
+            seek($fh, 0, 0);
+            truncate($fh, 0);
+            print $fh "$$\n";
+        } elsif ( $op == 8 ) {
+            seek($fh, 0, 0);
+            truncate($fh, 0);
+        }
+    }
+}
+
+__END__
+
+=head1 NAME
+
+simplecfm - Simple Configuration Management
+
+=head1 SYNOPSIS
+
+simplecfm [I<options>] I<scfm-file> [..]
+
+=head1 DESCRIPTION
+
+B<simplecfm> is a tool for configuring a system and its software using a simplified
+configuration language and limited set of functionality. The goal is to provide a 
+lightweight alternative to other configuration management software which may have
+a higher learning curve or take more time to set up.
+
+I<scfm-file> is a file formatted using simplecfm's configuration language. By default
+simplecfm will change to the directory of this file before execution, so all
+operations in the configuration file are local to this directory.
+
+=head1 OPTIONS
+
+=over 4
+
+=item B<-i> I<seconds>, B<--interval>=I<seconds>
+
+Tells simplecfm to loop indefinitely over each I<scfm-file> after I<seconds>
+has elapsed. If the directory containing I<scfm-file> is revision-controlled you
+can run something like C<svn update> before any operations to pull the
+most recent configuration, then have a second I<scfm-file> do the rest of
+the changes.
+
+=item B<-p> I<pidfile>, B<--pid>=I<pidfile>
+
+Sets the pid file to use. By default only one instance of simplecfm is allowed to
+run at a time, but specifying a new pid file will override that.
+
+=item B<-s> I<user>, B<--su>=I<user>
+
+Forks a new process, exits the parent, changes the user/group to that of I<user>
+and continues as normal.
+
+=item B<--no-cd>
+
+Don't change to the directory of I<scfm-file> before interpreting it.
+
+=item B<--dry-run>
+
+Does not perform any actions but does a syntax check on I<scfm-file>. This will
+execute any commands in backticks in order to fully evaluate the syntax.
+
+=item B<-v>, B<--verbose>
+
+Print out more verbose output.
+
+=item B<-h>, B<--help>
+
+Print out usage information.
+
+=back
+
+=head1 SCFM CONFIGURATION FILE FORMAT
+
+The configuration file format is designed to be simple, functional and resemble
+natural language. Each line can contain one expression. There is no special
+punctuation except for variables. Whitespace does not matter (screw you, python).
+Comments can be included using a hash symbol (I<#>) at the beginning of a line.
+
+=head2 Variables
+
+Variables are supported throughout the configuration file. You can use a variable
+by wrapping its name in a ${} block, such as I<${VAR}>. You set the variable by
+simply putting the name, an equals sign (I<=>), and what you want it to be set to
+on a single line.
+
+The suggested convention is to use only capital letters for variables. All environment
+variables from your shell environment are converted to variables at run time.
+
+Example:
+
+    MYVAR=here is a variable
+    MYVAR2="here is another one"
+    MYVAR3="the old variable was ${MYVAR}"
+    run echo "stuff here: ${MYVAR3}"
+
+Before any line is interpreted, all variable blocks on the line are replaced with
+their values.
+
+=head2 Backticks
+
+Since the configuration language is limited, it helps to be able to call a one-line
+shell script or external program to provide extra functionality. Anything enclosed 
+between two backtick (I<`>) characters is executed and the output is inserted into the
+line.
+
+Example:
+
+     if `echo $HOSTNAME | grep -qe "\.la\.domain\.com$" && echo 1` is "1"
+       include domains/la.domain.com/main.scfm
+     done
+
+     FREEMEM=`free -m | grep Mem: | awk '{print $4}'`
+
+     INTF_ETH0=`ifconfig eth0 | grep addr: | cut -d : -f 2- | awk '{print $1}' | grep -e "[0-9]\+\.[0-9]\+\.[0-9]\+\.[0-9]\+"`
+
+=head2 Conditionals
+
+Each conditional statement begins on its own line and ends on a line with only
+the word 'done' (whitespace does not matter).
+
+=head3 if
+
+The 'if' statement tests if one expression is, or isn't, the same as a second
+expression. The expressions can be literals, variables or backticks.
+
+Syntax:
+
+    if EXPR is|isnt EXPR
+        ...
+    done
+
+=head3 foreach
+
+The 'foreach' statement will loop over a series of configuration lines, each
+time replacing a variable with an entry from a list, until it is done with the
+list. Each iteration of the loop is over once it reaches a line with only the word
+'done' on it.
+
+A list is just a space-separated expression such as "one two three four", which
+can be a literal, a variable or backticks as before.
+
+Syntax:
+
+    foreach NAME in EXPR
+      ...
+    done
+
+=head2 Command expressions
+
+Each line that isn't a variable being set or a conditional is a command expression.
+These are similar to a standard unix command in that they have a command name,
+options and arguments.
+
+=over 4
+
+=item B<copy> I<[options]> I<file> [..]
+
+ -t,--to DEST          - The destination of the file to copy
+ -m,--mode MODE        - The mode of files to copy
+ -l,--local            - Only operates locally. The default is to
+                         use rsync to copy files either locally or remotely.
+    --no-backup        - Does not backup destination files. By default
+                         makes a backup of existing files.
+    --no-recurse       - Does not copy recursively. By default all
+                         files are copied recursively.
+
+By default we use rsync for copying files, to support both local and remote file
+copying using ssh and to speed up even local copies when the files aren't greatly
+different. Using --local will force using 'cp'.
+
+Note: the --mode here is passed to rsync via its '--chmod' parameter, which only
+seems to take non-octal permission modes. See rsync(1) and chmod(1) man pages for
+details.
+
+Also note: the mode you set here is set on ALL destination files, including
+directories (unless you specify otherwise using rsync's non-standard formatting
+to differentiate between files and directoies). If you use '--mode 0600' and a
+directory is copied, I<you won't be able to read that directory> because all
+directories need executable permissions to be able to read their contents!
+
+If the mode specified was octal, we run chmod separately to attempt to set the mode
+manually. This obviously increases the risk of a security race condition in between
+copying the file and running chmod. To ensure the file is copied safely, set the
+permission before you copy using the 'permissions' command.
+
+ Example:
+     copy --mode u=rw,g=,o= --to /etc/httpd/httpd.conf files/httpd.conf.example
+     copy --mode 0600 --to /etc/httpd/httpd.conf files/httpd.conf.example
+
+=item B<makedir> I<[options]> I<directory> [..]
+
+ -m,--mode MODE        - The mode of the directory
+    --no-parents       - Does not create parent directories. Default is
+                         to create any parent directories that don't exist.
+ 
+ Example:
+     makedir --mode 0750 /srv/httpd/cgi-bin
+
+=item B<delete> I<[options]> I<file> [..]
+
+    --no-recurse       - Does not delete recursively. By default all files
+                         are deleted recursively.
+
+=item B<move> I<[options]> I<file> [..]
+
+ -t,--to DEST          - The destination of the files to move
+
+=item B<append> I<[options]> I<argument> [..]
+
+ -t,--to FILE          - The file to append to
+ -f,--files            - Specifies that arguments are files to be appended
+                         to FILE. By default arguments are literal strings
+                         appended to the file.
+
+=item B<run> I<[options]> executable [arguments ..]
+
+ -e,--error            - Force simplecfm to exit with an error if the executable
+                         returns a non-zero status.
+ -i,--import           - Reads the output of the program and imports any
+                         KEY=VALUE pairs as variables.
+
+It should be noted that this command's arguments are passed as-is to the
+shell for execution (after variables are replaced), so a double-quote will
+be sent as-is, as well as backslashes, etc.
+
+=item B<permissions> I<[options]> I<perms> I<file> [..]
+
+    perms              - Standard mode or octal permission passed to chmod(1)
+ -r,--recurse          - Applies permissions to files recursively. Default
+                         is to not apply recursively.
+
+=item B<ownership> I<[options]> I<[owner][:[group]]> I<file> [..]
+
+    [owner][:[group]]  - Same owner/group argument given to chown(1)
+ -r,--recurse          - Applies ownership to files recursively. Default
+                         is to not apply recursively.
+
+=item B<include> I<file>
+
+Interprets an scfm-format I<file>. Changes to the directory of the I<file> unless
+--no-cd was passed on the command line. Variables are shared, unlike specifying
+multiple files on the command line which does not share variables.
+
+=item B<su> I<user>
+
+Forks a new process, changes to user I<user> and continues interpreting the
+I<scfm-file> until it is done. Then simplecfm continues with the next I<scfm-file>.
+Keep in mind that this does nothing to secure the continued operation of
+simplecfm; an attacker may find a way to exploit your system if they are allowed
+to execute commands even as an unpriviledged user.
+
+Note that all this does is change the current user and group. All variables such
+as '${USER}', '${HOME}', etc remain as they were. If you want to really emulate
+running simplecfm as a different user, use your system's "sudo" or "su" command.
+
+=back
+
+=head1 NOTES
+
+- Backticks are still executed even if you used the '--dry-run' option! This is
+  because often backticks are used for tests which need to be run before the
+  configuration is fully known. Don't put anything in backticks that you don't
+  want run in a syntax check, basically.
+
+- Most of simplecfm's commands are implemented by running an external program.
+  If you want to pass extra options for those programs you can specify them
+  before your other arguments. For example, if you wanted to prevent from
+  copying any revision-control files to a destination directory, just use the
+  '-C' option to rsync like this:
+
+    copy --mode u=rwx --to some-destination/ -C file1.txt dir1/
+
+  Here the '-C' is passed to rsync and interpreted by it as a command-line
+  option, even though to simplecfm it might as well be a file. The same can
+  be used for other commands such as 'makedir', 'ownership', etc.
+
+- Since Getopt::Long is used to parse the options for the commands, it may
+  sometimes interpret an argument you're giving as an option. To make sure the
+  command knows you're done passing options, use '--'. 
+  Example:
+
+    copy --to /some/path/ -- some_arguments here.txt --local
+
+  In this example the files that are copied into /some/path/ are "some_arguments",
+  "here.txt", and "--local". The only exception to this is the 'run' command,
+  which passes everything after its options exactly as it's found on the line.
+
+=head1 AUTHOR
+
+Peter Willis <peterwwillis@yahoo.com>
+
+=head1 COPYRIGHT AND LICENSE
+
+Copyright (C) 2012 Peter Willis <peterwwillis@yahoo.com>
+
+=cut
+
