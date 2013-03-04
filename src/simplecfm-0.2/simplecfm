@@ -11,6 +11,7 @@ use Cwd qw(abs_path);
 use POSIX;
 
 my $VERBOSE = exists $ENV{VERBOSE} ? $ENV{VERBOSE} : 0;
+my $DEBUG = 0;
 my %VARIABLES = %ENV;
 my %OPTS = ( 'dry-run' => undef, 'verbose' => \$VERBOSE );
 my $HOME = (getpwuid($<))[7];
@@ -165,7 +166,7 @@ sub _parse_scfm_line {
 
         # return immediately if 'su' was passed, because whether it fails or not we don't want
         # to continue as the current user parsing this file
-        if ( $o->{'_line_'}->{'action'} eq "su" ) {
+        if ( defined $o->{'_line_'}->{'action'} and  $o->{'_line_'}->{'action'} eq "su" ) {
             return;
 
         # return immediately (issued by do_done() )
@@ -197,17 +198,34 @@ sub process_line {
     #$self->{'_data_'} =~ s/(\`.+?[^\\]\`)/"$1"/g;
     $line->{'data'} =~ s/(\`.+?[^\\]\`)/"$1"/g;
 
+    print STDERR "$0: Line data '$line->{data}'\n" if $VERBOSE;
+
     #my @stuff = shellwords($line->{'data'});
     my @stuff = quotewords( '\s+', 1, $line->{'data'} );
 
     # Set action
+    #print STDERR "$0: Checking action for stuff '@stuff'\n" if $VERBOSE;
+    for ( my $i=0; $i<@stuff; $i++ ) {
+        print STDERR "$0: stuff[$i]: $stuff[$i]\n" if $DEBUG;
+    }
+
     if ( $stuff[0] =~ /^(copy|run|makedir|delete|move|append|permissions|ownership|if|foreach|run|include|done|su)$/i ) {
         $line->{'action'} = lc $1;
         shift @stuff;
 
     # Match on setting variables
-    } elsif ( ($stuff[0] =~ /^\w+$/ and $stuff[1] eq "=") or $stuff[0] =~ /^(\w+)=(.+)$/ ) {
+    } elsif ( $stuff[0] =~ /^\w+$/ and $stuff[1] eq "=" ) {
+        print STDERR "$0: Detected variable\n" if $VERBOSE;
         $line->{'action'} = "VARIABLE";
+
+    # Hack to make 'WORD=blahablah' interpreted the same as 'WORD = blahblah'
+    } elsif ( $stuff[0] =~ /^(\w+)=(.+)$/ ) {
+        #my $tmp = shift @stuff;
+        shift @stuff;
+        unshift(@stuff, $1, "=", $2);
+        print STDERR "$0: Detected variable\n" if $VERBOSE;
+        $line->{'action'} = "VARIABLE";
+
 
     } else {
         print STDERR "$0: Error: invalid action \"$stuff[0]\"\n";
@@ -217,8 +235,12 @@ sub process_line {
     foreach my $thing ( @stuff ) {
         $thing =~ s/\${([^}]+?)}/exists $self->{'variables'}->{$1} ? $self->{'variables'}->{$1} : "\$\{$1\}"/eg;
 
+        print STDERR "$0: thing $thing\n" if $DEBUG;
+
         # Execute backticks
-        if ( $thing =~ /^\`(.+)\`$/ ) {
+        #if ( $thing =~ /^\`(.+)\`$/ ) {
+        if ( $thing =~ /^"?\`(.+)\`"?$/ ) {
+            print STDERR "$0: Detected backticks; running now\n" if $VERBOSE;
             chomp($thing = `$1`);
             #if ( ($? >> 8) != 0 ) {
             #    print STDERR "$0: Error: backtick command '$1' returned non-zero status\n" if $VERBOSE;
@@ -231,11 +253,13 @@ sub process_line {
         if ( $stuff[0] =~ /^\w+$/ and $stuff[1] eq "=" ) {
             my $k = shift @stuff;
             shift @stuff;
-            $self->{'variables'}->{$stuff[0]} = join(" ", @stuff);
+            #$self->{'variables'}->{$stuff[0]} = join(" ", @stuff);
+            $self->{'variables'}->{$k} = join(" ", @stuff);
+            print STDERR "$0: setting1 variable variables{$k} = @stuff\n" if $DEBUG;
         } else {
             my $stuff = join(" ", @stuff);
             if ( $stuff =~ /^(\w+)=(.+)$/ ) {
-                #print STDERR "setting variable variables{$1} = $2\n";
+                print STDERR "$0: setting2 variable variables{$1} = $2\n" if $DEBUG;
                 $self->{'variables'}->{$1} = $2;
             } else {
                 print STDERR "$0: Error: invalid variable-setting line \"$stuff\"\n";
@@ -252,6 +276,9 @@ sub process_line {
 
 sub action {
     my $s = shift;
+
+    #use Data::Dumper; print "action: ", Dumper($s);
+
     my %hand = (
         "if" => \&do_if,
         "done" => \&do_done,
@@ -624,9 +651,13 @@ sub do_append {
         die "$0: Error: missing arguments to append";
     }
 
+    for (my $i=0; $i<@{ $s->{'_line_'}->{'list'} }; $i++ ) {
+        print STDERR "$0: line->list $i: $s->{'_line_'}->{list}->[$i]\n" if $DEBUG;
+    }
+
     my $args = join( " ", @{ $s->{'_line_'}->{'list'} } );
 
-    print STDERR "$0: " . (defined $OPTS{'dry-run'} ? "Dry-append" : "Appending") . "to '$to': '$args'\n" if $VERBOSE;
+    print STDERR "$0: " . (defined $OPTS{'dry-run'} ? "Dry-append" : "Appending") . " to '$to': '$args'\n" if $VERBOSE;
     return 1 if (defined $OPTS{'dry-run'});
 
     open(my $fh, ">>$to") || die "Error: could not append to $to: $!";
@@ -641,7 +672,7 @@ sub do_append {
         }
 
     } else {
-        print $fh $args;
+        print $fh $args . "\n";;
     }
 
     close($fh);
@@ -767,6 +798,10 @@ sub do_run {
 
     # Just run it if we haven't specified --import
     if ( !defined $import ) {
+        print STDERR "About to run runcmd\n" if $VERBOSE;
+        for ( my $i=0; $i<@cmd; $i++ ) {
+            print STDERR "$0: cmd $i: $cmd[$i]\n" if $DEBUG;
+        }
         my $ret = runcmd($s, [ join(" ", @cmd) ] );
         if ( defined $error and !$ret ) {
             die "$0: Error: command failed and --error passed; exiting\n";
@@ -776,6 +811,10 @@ sub do_run {
 
     # These stay here because runcmd() handles the exact same two lines.
     # If you move this up you'll just have double verbose messages.
+
+    for ( my $i=0; $i<@cmd; $i++ ) {
+        print STDERR "$0: cmd $i: $cmd[$i]\n" if $DEBUG;
+    }
 
     print STDERR "$0: " . (defined $OPTS{'dry-run'} ? "Dry-run" : "Running") . ": @cmd\n" if $VERBOSE;
     return 1 if ( defined $OPTS{'dry-run'} );
@@ -813,6 +852,9 @@ sub runcmd {
     my $s = shift;
     my $cmd = shift;
 
+    for ( my $i=0; $i<@$cmd; $i++ ) {
+        print STDERR "$0: cmd $i: $cmd->[$i]\n" if $DEBUG;
+    }
     print STDERR "$0: " . (defined $OPTS{'dry-run'} ? "Dry-run" : "Running") . ": @$cmd\n" if $VERBOSE;
     return 1 if ( defined $OPTS{'dry-run'} );
 
