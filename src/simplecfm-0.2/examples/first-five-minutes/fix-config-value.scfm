@@ -1,0 +1,19 @@
+# fix-config-value.scfm
+# yes, this is kind of an ugly hack, but it's cleaner than pasting all this into every file
+# and means i don't need to write a dedicated app in simplecfm/bin/
+
+# Check for CONFIG_VALUE in CONFIG_FILE
+
+if `grep -q '^${CONFIG_VALUE}$' ${CONFIG_FILE} && echo 1` isnt "1"
+    
+    # Get first word from CONFIG_VALUE
+    WORD=`echo '${CONFIG_VALUE}' | sed -e 's/^[[:space:]]//g' | awk '{print $1}'`
+
+    # Comment out existing line
+    run sed -i -e 's/^[[:space:]]*${WORD}[[:space:]]/#${WORD} /g' ${CONFIG_FILE}
+
+    # Append value
+    append -t ${CONFIG_FILE} ""
+    append -t ${CONFIG_FILE} ${CONFIG_VALUE}
+done
+

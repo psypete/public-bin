@@ -252,7 +252,8 @@ sub process_line {
 
         # Replace current @stuff element with an expanded list of the variable found
         } elsif ( $stuff[$ti] =~ /^\@{([^}]+?)}$/ and exists $self->{'variables'}->{$1} ) {
-            splice(@stuff, $ti, 1, split(/\s+/, $self->{'variables'}->{$1}));
+            #splice(@stuff, $ti, 1, split(/\s+/, $self->{'variables'}->{$1}));
+            splice(@stuff, $ti, 1, quotewords( '\s+', $keep, $self->{'variables'}->{$1} ) ) ;
 
             # Reset the $ti index to the first element we just added to @stuff
             # and continue the next loop iteration
@@ -1028,8 +1029,8 @@ on a single line.
 
 When a variable is expanded in a command's arguments it is done in-line to the
 argument, which results in the whole contents of the variable taking up no more
-than one argument. To expand the variable into a list of arguments (based on
-spaces in the variable), use the format I<@{VAR}> as an argument by itself.
+than one argument. To expand the variable into a list of arguments, use the
+format I<@{VAR}> as an argument by itself.
 
 The suggested convention is to use only capital letters for variables. All environment
 variables from your shell environment are converted to variables at run time.

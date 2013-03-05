@@ -1,0 +1,7 @@
+# firewall.scfm
+
+run ufw allow from ${MY_IP} to any port 22
+run ufw allow 80
+run ufw allow 443
+run ufw enable
+

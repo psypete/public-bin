@@ -1,0 +1,17 @@
+# main.scfm
+
+# Set up some default variables
+MY_IP=192.168.10.5
+
+# Set up basic system config
+include system.scfm
+
+# Set up 'deploy' user
+include user-deploy.scfm
+
+# Set up sshd service
+include sshd.scfm
+
+# Set up firewall
+include firewall.scfm
+

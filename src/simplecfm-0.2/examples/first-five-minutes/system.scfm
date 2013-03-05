@@ -1,0 +1,34 @@
+# system.scfm
+
+# Do basic updates
+run apt-get update
+run apt-get upgrade
+
+# Install fail2ban
+run apt-get install fail2ban
+
+# Set up security updates
+run apt-get install unattended-upgrades
+
+# Edit the periodic file
+CONFIG_FILE=/etc/apt/apt.conf.d/10periodic
+
+CONFIG_VALUE="APT::Periodic::Update-Package-Lists \"1\";"
+include fix-config-value.scfm
+
+CONFIG_VALUE="APT::Periodic::Download-Upgradeable-Packages \"1\";"
+include fix-config-value.scfm
+
+CONFIG_VALUE="APT::Periodic::AutocleanInterval \"7\";"
+include fix-config-value.scfm
+
+CONFIG_VALUE="APT::Periodic::Unattended-Upgrade \"\1";"
+include fix-config-value.scfm
+
+# Edit the unnattended-upgrades file
+run sed -i -e 's/^\([[:space:]]*"Ubuntu lucid-updates"\)/\/\/\1/' /etc/apt/apt.conf.d/50unattended-upgrades
+
+# Install logwatch
+run apt-get install logwatch
+append -t /etc/cron.daily/00logwatch "/usr/sbin/logwatch --output mail --mailto test@gmail.com --detail high"
+

@@ -1,0 +1,25 @@
+# sshd.scfm
+
+# Path to sshd config
+SSHD_CONFIG=/etc/ssh/sshd_config
+
+# IP addresses to allow SSH deploy user from
+ALLOW_USERS=deploy@${MY_IP} deploy@192.168.10.6 deploy@192.168.10.22
+
+CONFIG_FILE=${SSHD_CONFIG}
+
+# comment out invalid PermitRootLogin, append new one
+CONFIG_VALUE=PermitRootLogin no
+include fix-config-value.scfm
+
+# comment out invalid PasswordAuthentication, append new one
+CONFIG_VALUE=PasswordAuthentication no
+include fix-config-value.scfm
+
+# comment out invalid AllowUsers, append new one
+CONFIG_VALUE=AllowUsers ${ALLOW_USERS}
+include fix-config-value.scfm
+
+# restart sshd process
+run service ssh restart
+

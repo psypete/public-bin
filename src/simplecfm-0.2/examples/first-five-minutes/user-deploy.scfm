@@ -1,0 +1,23 @@
+# user-deploy.scfm
+
+# add/update the user and group
+update-users-groups web web:webd
+
+# set up ssh dir
+makedir /home/web/.ssh
+permissions 0700 /home/web/.ssh
+ownership web:webd /home/web
+ownership web:webd /home/web/.ssh
+
+# add ssh pubkey
+append -t /home/web/.ssh/authorized_keys -f authorized_keys-user-deploy.pub
+permissions 0400 /home/web/.ssh/authorized_keys
+
+# make all homedir files owned by web:webd
+ownership -r web:webd /home/web
+
+# add user to sudo for deploy tool
+if `grep -q '^deploy ALL=(ALL) /usr/local/bin/deployit$' && echo 1` isnt "1"
+    append -t /etc/sudoers "deploy ALL=(ALL) /usr/local/bin/deployit"
+done
+
