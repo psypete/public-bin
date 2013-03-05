@@ -191,6 +191,8 @@ sub process_line {
     my $self = shift;
     $self->{'_line_'} = {} if ( !exists $self->{'_line_'} );
     my $line = $self->{'_line_'};
+    my $keep = exists $self->{'variables'}->{'QUOTEWORDS_KEEP'} ? $self->{'variables'}->{'QUOTEWORDS_KEEP'} : 0;
+    $keep = 0 unless (defined $keep and $keep =~ /^\d+$/);
     
     $line->{'data'} = shift;
 
@@ -201,12 +203,21 @@ sub process_line {
     print STDERR "$0: Line data '$line->{data}'\n" if $VERBOSE;
 
     #my @stuff = shellwords($line->{'data'});
-    my @stuff = quotewords( '\s+', 1, $line->{'data'} );
+    my @stuff = quotewords( '\s+', $keep, $line->{'data'} );
+
+    # Hack to remove undefined array elements (wtf, quotewords?)
+    @stuff = map { defined $_ ? $_ : () } @stuff;
+
+    $|=1;
+
+    #print "stuff array: ", Dumper(\@stuff);
 
     # Set action
-    #print STDERR "$0: Checking action for stuff '@stuff'\n" if $VERBOSE;
-    for ( my $i=0; $i<@stuff; $i++ ) {
-        print STDERR "$0: stuff[$i]: $stuff[$i]\n" if $DEBUG;
+    print STDERR "$0: Checking action for stuff '@stuff'\n" if $VERBOSE;
+    if ( $DEBUG ) {
+        for ( my $i=0; $i<@stuff; $i++ ) {
+            print STDERR "$0: stuff[$i]: $stuff[$i]\n";
+        }
     }
 
     if ( $stuff[0] =~ /^(copy|run|makedir|delete|move|append|permissions|ownership|if|foreach|run|include|done|su)$/i ) {
@@ -232,16 +243,34 @@ sub process_line {
     }
 
     # Replace variables, do backticks
-    foreach my $thing ( @stuff ) {
-        $thing =~ s/\${([^}]+?)}/exists $self->{'variables'}->{$1} ? $self->{'variables'}->{$1} : "\$\{$1\}"/eg;
 
-        print STDERR "$0: thing $thing\n" if $DEBUG;
+    for ( my $ti = 0; $ti < @stuff; $ti++ ) {
+
+        # Replace basic variables
+        if ( $stuff[$ti] =~ /\${[^}]+?}/ ) {
+            $stuff[$ti] =~ s/\${([^}]+?)}/exists $self->{'variables'}->{$1} ? $self->{'variables'}->{$1} : "\$\{$1\}"/eg;
+
+        # Replace current @stuff element with an expanded list of the variable found
+        } elsif ( $stuff[$ti] =~ /^\@{([^}]+?)}$/ and exists $self->{'variables'}->{$1} ) {
+            splice(@stuff, $ti, 1, split(/\s+/, $self->{'variables'}->{$1}));
+
+            # Reset the $ti index to the first element we just added to @stuff
+            # and continue the next loop iteration
+            $ti--;
+            next;
+
+        # @{} format was not its own argument, so just expand it within the current one
+        } elsif ( $stuff[$ti] =~ /\@{[^}]+?}/ ) {
+            $stuff[$ti] =~ s/\@{([^}]+?)}/exists $self->{'variables'}->{$1} ? $self->{'variables'}->{$1} : "\@\{$1\}"/eg;
+
+        }
+
+        print STDERR "$0: thing $stuff[$ti]\n" if $DEBUG;
 
         # Execute backticks
-        #if ( $thing =~ /^\`(.+)\`$/ ) {
-        if ( $thing =~ /^"?\`(.+)\`"?$/ ) {
+        if ( $stuff[$ti] =~ /^"?\`(.+)\`"?$/ ) {
             print STDERR "$0: Detected backticks; running now\n" if $VERBOSE;
-            chomp($thing = `$1`);
+            chomp($stuff[$ti] = `$1`);
             #if ( ($? >> 8) != 0 ) {
             #    print STDERR "$0: Error: backtick command '$1' returned non-zero status\n" if $VERBOSE;
             #}
@@ -577,7 +606,7 @@ sub do_makedir {
     my @dirs;
     foreach my $dir ( @{$s->{'_line_'}->{'list'}} ) {
         if ( -d $dir ) {
-            print STDERR "$0: Warning: directory $dir already exists\n" if $VERBOSE;
+            print STDERR "$0: Warning: directory '$dir' already exists\n" if $VERBOSE;
             if ( defined $mode ) {
                 if ( ! runcmd( $s, [ "chmod", $mode, $dir ] ) ) {
                     $worked = 0;
@@ -630,7 +659,7 @@ sub do_move {
 
     foreach my $dir ( @{$s->{'_line_'}->{'list'}} ) {
         if ( -d $dir ) {
-            print STDERR "$0: Error: directory $dir already exists\n";
+            print STDERR "$0: Error: directory '$dir' already exists\n";
             return 0;
         }
     }
@@ -799,10 +828,19 @@ sub do_run {
     # Just run it if we haven't specified --import
     if ( !defined $import ) {
         print STDERR "About to run runcmd\n" if $VERBOSE;
-        for ( my $i=0; $i<@cmd; $i++ ) {
-            print STDERR "$0: cmd $i: $cmd[$i]\n" if $DEBUG;
+        if ( $DEBUG ) {
+            for ( my $i=0; $i<@cmd; $i++ ) {
+                print STDERR "$0: cmd $i: $cmd[$i]\n";
+            }
         }
-        my $ret = runcmd($s, [ join(" ", @cmd) ] );
+        #my $ret = runcmd($s, [ join(" ", @cmd) ] );
+        # The above commented-out code (using join) would remove the separation
+        # of arguments, which destroys preservation of things like
+        #  "blah  blah" being passed as literally blah with two spaces and no
+        #  quotes. Used to preserve quotes, but we changed default of quotewords
+        #  $keep option to 0, so quotes are no longer preserved/passed, so we need
+        #  to preserve the separation of arguments below.
+        my $ret = runcmd($s, [ @cmd ] );
         if ( defined $error and !$ret ) {
             die "$0: Error: command failed and --error passed; exiting\n";
         }
@@ -811,9 +849,13 @@ sub do_run {
 
     # These stay here because runcmd() handles the exact same two lines.
     # If you move this up you'll just have double verbose messages.
+    
+    #print "do_run: ", Dumper($s->{'_line_'});
 
-    for ( my $i=0; $i<@cmd; $i++ ) {
-        print STDERR "$0: cmd $i: $cmd[$i]\n" if $DEBUG;
+    if ( $DEBUG ) {
+        for ( my $i=0; $i<@cmd; $i++ ) {
+            print STDERR "$0: cmd $i: $cmd[$i]\n";
+        }
     }
 
     print STDERR "$0: " . (defined $OPTS{'dry-run'} ? "Dry-run" : "Running") . ": @cmd\n" if $VERBOSE;
@@ -852,8 +894,12 @@ sub runcmd {
     my $s = shift;
     my $cmd = shift;
 
-    for ( my $i=0; $i<@$cmd; $i++ ) {
-        print STDERR "$0: cmd $i: $cmd->[$i]\n" if $DEBUG;
+    #use Data::Dumper;  print "runcmd: ", Dumper($s->{'_line_'});
+
+    if ( $DEBUG ) {
+        for ( my $i=0; $i<@$cmd; $i++ ) {
+            print STDERR "$0: cmd $i: $cmd->[$i]\n";
+        }
     }
     print STDERR "$0: " . (defined $OPTS{'dry-run'} ? "Dry-run" : "Running") . ": @$cmd\n" if $VERBOSE;
     return 1 if ( defined $OPTS{'dry-run'} );
@@ -980,6 +1026,11 @@ by wrapping its name in a ${} block, such as I<${VAR}>. You set the variable by
 simply putting the name, an equals sign (I<=>), and what you want it to be set to
 on a single line.
 
+When a variable is expanded in a command's arguments it is done in-line to the
+argument, which results in the whole contents of the variable taking up no more
+than one argument. To expand the variable into a list of arguments (based on
+spaces in the variable), use the format I<@{VAR}> as an argument by itself.
+
 The suggested convention is to use only capital letters for variables. All environment
 variables from your shell environment are converted to variables at run time.
 
@@ -989,6 +1040,19 @@ Example:
     MYVAR2="here is another one"
     MYVAR3="the old variable was ${MYVAR}"
     run echo "stuff here: ${MYVAR3}"
+
+    makedir ${MYVAR}
+    # Makes a directory named 'here is a variable'
+    
+    makedir @{MYVAR}
+    makedir "@{MYVAR}"
+    # Both examples make four directories: 'here', 'is', 'a', 'variable'
+    
+    makedir "blah @{MYVAR}"
+    # Makes a directory 'blah here is a variable' because @{MYVAR} is part
+    # of the quoted argument 'blah @{MYVAR}'.
+    # To expand to multiple arguments the @{MYVAR} argument must be by itself.
+
 
 Before any line is interpreted, all variable blocks on the line are replaced with
 their values.

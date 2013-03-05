@@ -33,6 +33,8 @@ syntax:
     - to begin support only '${NAME}' type variables, probably easier to understand
     - arrays not explicitly supported; just put stuff separated by spaces or newlines in variables
     - set variables on a line with 'KEY=VALUE' or with --import using 'run' action
+    - support expansion of variables using '@{NAME}' syntax if they are their own argument;
+      otherwise just expand inline the same as '${NAME}'
   * support comments using pound symbol ('# something')
   * support multiple operations over a list
     - format:

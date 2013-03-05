@@ -14,12 +14,12 @@ functionality needed to configure a host or its software.
                                USAGE
 
 To use the tool, first configure a .scfm file according to
-documentaiton.txt. Check the examples/ directory for more ideas. Then simply
-run the tool with the path to the .scfm file.
+documentation.txt.  Check the examples/ directory for more ideas.  Then
+simply run the tool with the path to the .scfm file.
 
-All operations are done from the path you started simplecfm from, so every
-copy, run, etc will happen in the directory of the .scfm file. Keep that in
-mind when writing and running your .scfm files.
+All operations are done from the directory of the .scfm file you are
+parsing.  It is recommended you use variables with full paths to files you
+want to operate on.
 
 To get more verbose information, use '-v'. To test the configuration and not
 actually perform any operations, use '--dry-run'.
@@ -54,7 +54,55 @@ Read the man page using 'man ./simplecfm.1' or 'pod2man simplecfm | nroff
 
     copy --to /some/path/ -- some_arguments here.txt --local
 
-  In this example the files that are copied into /some/path/ are "some_arguments",
-  "here.txt", and "--local". The only exception to this is the 'run' command,
-  which passes everything after its options exactly as it's found on the line.
+  In this example the files that are copied into /some/path/ are
+  "some_arguments", "here.txt", and "--local".  The only exception to this
+  is the 'run' command, which passes everything after its options exactly as
+  it's found on the line.
+
+- Since version 0.2, all lines are parsed the way a shell would parse them
+  for special metacharacters (such as " \ * $ ).  The unnecessary
+  metacharacters are discarded and extra whitespace is removed unless it is
+  escaped (using a backslash) or quoted.  Examples:
+
+    VAR3=nothing "special   here"
+
+  Is represented internally as:
+    nothing special   here
+
+  This is important later when you want to make a directory called
+  'nothing special   here', but it comes out 'nothing special here'
+  because the extra spaces are removed if they are not enclosed in
+  quotes.
+
+  Another thing to remember about the parsing of arguments, spaces and
+  metacharacters is how arguments are parsed. If you had a line like:
+
+    VAR2=here are some words separated by spaces
+    makedir ${VAR2} and some more
+
+  You would end up with the following directories:
+
+    $ ls -ldtr *
+    drwxr-xr-x 2 pwillis pwillis 4096 Mar  4 18:02 some
+    drwxr-xr-x 2 pwillis pwillis 4096 Mar  4 18:02 more
+    drwxr-xr-x 2 pwillis pwillis 4096 Mar  4 18:02 here are some words separated by spaces
+    drwxr-xr-x 2 pwillis pwillis 4096 Mar  4 18:02 and
+
+  This is because when the 'makedir' line is parsed for its arguments, the
+  VAR2 variable is seen as one single argument to makedir (like one single
+  directory called '${VAR2}' to be created).  But before the command is
+  executed, ${VAR2} is replaced with the value of the variable ("here are
+  ..").
+
+  You don't have to use quotes around ${VAR2} because the program is
+  treating it as an independent argument just like 'some', 'more', and 'and'
+  are independent arguments.  At the point that 'makedir' is evaluated, the
+  program doesn't know there are spaces inside the '${VAR2}' variable; it's
+  just taking the contents and shoving it into the argument slot where
+  ${VAR2} was before.
+
+  To override this behavior and keep all metacharacters in place,
+  set the following variable in your .scfm file:
+
+    QUOTEWORDS_KEEP=1
 
