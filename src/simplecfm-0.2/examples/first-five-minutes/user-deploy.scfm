@@ -1,7 +1,7 @@
 # user-deploy.scfm
 
 # add/update the user and group
-update-users-groups web web:webd
+update-users-groups --users "deploy web" --groups "deploy:deploy web:webd"
 
 # set up ssh dir
 makedir /home/web/.ssh
