@@ -84,7 +84,8 @@ function do_make() {
                 BN=\`basename \"\$CWD\"\` ;
                 mkdir -p _install$PREFIX/doc/\"\$BN\" ;
                 LDFLAGS=\"-L${LIBDIR}\" make DESTDIR=\"\$CWD/_install\" install ; makeret=$? ;
-                cp -a AUTHORS* COPYING* ChangeLog* CHANGELOG* INSTALL* NEWS* README* ReadMe* TODO* CONTACT* DEVELOPERS* GPL* LGPL* IDEAS* INDEX* KNOWN* *-FAQ RELEASE* UPGRADE* MAINTAINERS* PORTING* ANNOUNCE* VERSION* CREDITS* LICENSE* THANKS* *.html contrib docdocs _install$PREFIX/doc/\"\$BN\" 2>/dev/null ;
+                cp -a AUTHORS* COPYING* ChangeLog* CHANGELOG* INSTALL* NEWS* README* ReadMe* TODO* CONTACT* DEVELOPERS* GPL* LGPL* IDEAS* INDEX* KNOWN* *-FAQ RELEASE* UPGRADE* MAINTAINERS* PORTING* ANNOUNCE* VERSION* CREDITS* LICENSE* THANKS* *.html contrib doc docs docdocs _install$PREFIX/doc/\"\$BN\" 2>/dev/null ;
+                chown -R root:root _install$PREFIX/doc/ ;
                 rmdir _install$PREFIX/doc/\"\$BN\" 2>/dev/null ;
                 if [ \$makeret -eq 0 ] ; then
                     slack_pkg
