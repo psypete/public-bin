@@ -7,6 +7,22 @@
 # and if the source already compiled it should just run the 'install'
 # and package creation portions.
 
+# FIXME: THIS MIGHT ONLY WORK IN BASH
+
+# Resolve full path to wrapper script
+pushd . > /dev/null
+SCRIPT_PATH="${BASH_SOURCE[0]}";
+if ([ -h "${SCRIPT_PATH}" ]) then
+  while([ -h "${SCRIPT_PATH}" ]) do cd `dirname "$SCRIPT_PATH"`; SCRIPT_PATH=`readlink "${SCRIPT_PATH}"`; done
+fi
+cd `dirname ${SCRIPT_PATH}` > /dev/null
+SCRIPT_PATH=`pwd`
+popd  > /dev/null
+
+# Add script path to PATH
+export PATH="$PATH:$SCRIPT_PATH"
+
+
 if [ ! -n "$ARCH" ] ; then
     if [ `uname -m` = "x86_64" ] ; then
         ARCH="x86-64"

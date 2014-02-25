@@ -2,6 +2,21 @@
 # slackpack - handle slackconfig and slackmake gracefully
 # Copyright (C) 2005-2007  Peter Willis <peterwwillis@yahoo.com>
 
+# FIXME: THIS MIGHT ONLY WORK IN BASH
+
+# Resolve full path to wrapper script
+pushd . > /dev/null
+SCRIPT_PATH="${BASH_SOURCE[0]}";
+if ([ -h "${SCRIPT_PATH}" ]) then
+  while([ -h "${SCRIPT_PATH}" ]) do cd `dirname "$SCRIPT_PATH"`; SCRIPT_PATH=`readlink "${SCRIPT_PATH}"`; done
+fi
+cd `dirname ${SCRIPT_PATH}` > /dev/null
+SCRIPT_PATH=`pwd`
+popd  > /dev/null
+
+# Add script path to PATH
+export PATH="$PATH:$SCRIPT_PATH"
+
 # temp file construction cruft...
 
 TEMPDIR=''
