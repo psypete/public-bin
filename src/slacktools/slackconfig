@@ -69,5 +69,9 @@ if [ -f "setup.py" ] ; then
     exit 0
 else
     echo "./configure $CONFIGUREOPTS $@" > slackconfig.log
-    LDFLAGS="-L${LIBDIR}" ./configure $CONFIGUREOPTS "$@" 2>&1 | tee -a slackconfig.log
+    ( LDFLAGS="-L${LIBDIR}" ./configure $CONFIGUREOPTS "$@" 2>&1 ; echo "RESULT: $?" ) | tee -a slackconfig.log
+    if [ "$(tail -n 1 slackconfig.log)" = "RESULT: 0" ] ; then
+        exit 0
+    fi
+    exit 1
 fi

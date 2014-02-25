@@ -45,10 +45,10 @@ function parse_args() {
 }
 
 function do_make() {
-    LDFLAGS="-L${LIBDIR}" make
-    if [ $? -eq 0 ] ; then
+    ( LDFLAGS="-L${LIBDIR}" make 2>&1 ; echo "RESULT: $?" ) | tee -a slackmake.log
+    if [ "$(tail -n 1 slackmake.log)" = "RESULT: 0" ] ; then
         echo "make WORKED."
-        if grep DESTDIR * 2>/dev/null 1>/dev/null ; then
+        if [ $( for i in * ; do [ -f "$i" ] && grep DESTDIR "$i" 2>/dev/null 1>/dev/null && echo "$?" && exit ; done; echo 1 ) -eq 0 ] ; then
             echo "RUNNING PRELIMINARY MAKE INSTALL ..."
             make DESTDIR="`pwd`/_install" install && makeret=$?
             if [ ! "x$makeret" = "x0" ] ; then
