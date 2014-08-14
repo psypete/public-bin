@@ -34,45 +34,24 @@ $CertUtils::VERBOSE = $VERBOSE;
 die "Usage: $0 certificate [..]\n\nSet env variable VERBOSE greater than 1 for debugging\n" if @ARGV < 1;
 
 
+my $e = 0;
 foreach my $file ( @ARGV ) {
-    main( $file );
+    $e += main( $file );
 }
 
-exit(0);
+exit($e);
 
 
 sub main {
     my $CERT = shift;
-
     my $c = CertUtils->new($CERT);
+    my $errors = 0;
 
     for ( $c->certificates ) {
-        check_exp($c, $_);
+        if ( ! $c->check_exp($_) ) {
+            $errors++;
+        }
     }
-}
-
-sub check_exp {
-    my $o = shift;
-    my $cert = shift;
-
-    print "Certificate Subject: '$cert->{'subject'}'\n" if $VERBOSE;
-
-    my ($c,$e) = ( scalar localtime($cert->{'created'}) , scalar localtime($cert->{'expires'}) );
-    print "Created: $c\n" if $VERBOSE;
-    print "Expires: $e\n" if $VERBOSE;
-
-    my $time = time();
-    my $timeleft = ($cert->{'expires'} - $time) || 1;
-
-    my $dleft = sprintf("%.2f",( ( ($timeleft / 60) / 60 ) / 24 ) );
-
-
-    if ( !defined $cert->{'expires'} or length $cert->{'expires'} < 1 or $cert->{'expires'} < 1 or $timeleft <= 1 ) {
-        print "ERROR: Certificate ".$o->file." has expired! timeleft $timeleft dleft $dleft\n";
-    } else {
-        print "Certificate ".$o->file." is still valid ($dleft days until it expires)\n";
-    }
-
-    return 1;
+    return $errors;
 }
 

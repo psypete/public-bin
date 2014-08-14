@@ -88,6 +88,7 @@ sub download_issuer {
 sub read_file {
     my $self = shift;
     my $file = shift;
+    $self->file($file) if (defined $file and !defined $self->file);
     $file ||= $self->file;
 
     open(my $fd, "<$file")||die"Error: cannot open file '$file': $!";
@@ -252,6 +253,38 @@ sub process_text {
 
     return @hashes;
 }
+
+
+sub check_exp {
+    my $o = shift;
+    my $cert = shift;
+
+    print "Certificate Subject: '$cert->{'subject'}'\n" if $o->verbose;
+
+    my ($c,$e) = ( scalar localtime($cert->{'created'}) , scalar localtime($cert->{'expires'}) );
+    print "Created: $c\n" if $o->verbose >= 2;
+    print "Expires: $e\n" if $o->verbose >= 2;
+
+    my $time = time();
+    my $timeleft = ($cert->{'expires'} - $time) || 1;
+
+    my $dleft = sprintf("%.2f",( ( ($timeleft / 60) / 60 ) / 24 ) );
+
+
+    if ( !defined $cert->{'expires'} or length $cert->{'expires'} < 1 or $cert->{'expires'} < 1 or $timeleft <= 1 ) {
+        print "ERROR: Certificate ".$o->file." has expired! timeleft $timeleft dleft $dleft\n";
+        return 0;
+    }
+    else {
+        print "Certificate ".$o->file." is still valid ($dleft days until it expires)\n" if $o->verbose;
+        return 1;
+    }
+}
+
+
+### end of methods
+### start of functions
+
 
 sub extract_time {
     my $datetime = shift;

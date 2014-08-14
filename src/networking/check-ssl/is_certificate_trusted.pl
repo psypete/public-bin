@@ -37,25 +37,35 @@ my $CERT = shift @ARGV;
 my $CACERTDIR = shift @ARGV;
 
 
-if (! main() ) {
-    die "Error: Could not find Certificate Authority for this certificate.\n";
-    exit(1);
+my $r = main();
+if ($r != 0) {
+    die "Error: Could not find Certificate Authority or a certificate was expired\n";
+    exit($r);
 }
 
 exit(0);
 
 
 sub main {
+    my $e = 0;
 
     my @cacerts = map {
         my $c = CertUtils->new($_);
+
+        for ( $c->certificates ) {
+            $c->check_exp($_) || $e++;
+        }
+
         $c->certificates
+
     } glob("$CACERTDIR/*");
 
     my $c = CertUtils->new($CERT);
     my $cert = ($c->certificates)[0];
 
     print "Certificate Subject: '$cert->{'subject'}'\n" if $VERBOSE;
+
+    $c->check_exp($cert) || $e++;
 
     die "Error: this is a CA certificate or a self-signed certificate!\n" if CertUtils::certs_linked($cert);
         
@@ -79,6 +89,8 @@ sub main {
                 my @tmpcerts = $tmpcert->download_issuer($cai)->certificates;
 
                 for ( @tmpcerts ) {
+                    $tmpcert->check_exp($_);
+
                     push(@tmpissuer, $_);
                     print "Found Issuer Subject: '$_->{'subject'}'\n" if $VERBOSE;
                     last;
@@ -130,7 +142,7 @@ sub main {
     
                 if ( certs_linked($ca) ) {
                     print "Found root CA for $CERT: $ca->{'subject'}\n";
-                    return 1;
+                    return 0;
                 } else {
                     die "Root CA isn't a root CA!";
                 }
@@ -143,7 +155,7 @@ sub main {
 
     }
 
-    return 0;
+    return $e;
 }
 
 
