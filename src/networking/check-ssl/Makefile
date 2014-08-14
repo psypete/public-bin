@@ -1,6 +1,7 @@
 
 
-all: extract_nmap_certs make_text_certs extract_cacerts make_text_ca_certs is_cert_valid
+#all: extract_nmap_certs make_text_certs extract_cacerts make_text_ca_certs is_cert_valid
+all: extract_cacerts make_text_ca_certs is_cert_valid
 
 nmap:
 	@echo "Running Nmap"
@@ -12,8 +13,8 @@ extract_nmap_certs:
 	for file in *.nmap ; do ./extract_pem_certs.pl $$file certs ; done
 
 make_text_certs:
-	@echo "Making text version of PEM certificates"
-	for file in `file certs/* | grep 'PEM certificate' | cut -d : -f 1` ; do \
+	@echo "Making text version of certificates"
+	for file in `ls certs/* | grep -v -e "\.txt$$"` ; do \
 		openssl x509 -noout -text -in $$file > $$file.txt ; \
 	done ; true
 
@@ -25,7 +26,7 @@ extract_cacerts:
 make_text_ca_certs:
 	@echo "Making text version of PEM CA certificates"
 	mkdir ca-certs-txt
-	for file in `file ca-certs/* | grep 'PEM certificate' | cut -d : -f 1` ; do \
+	for file in `ls ca-certs/* | grep -v -e "\.txt$$"` ; do \
 	    FN=`basename $$file` ; \
 	    openssl x509 -noout -text -in $$file > ca-certs-txt/$$FN ; \
 	done ; true
@@ -66,6 +67,6 @@ report:
 	echo "Ten most common Common Names: " ; cat certificates_by_domain.csv | csvcut.pl -n "Common Name" -r | sort | uniq -c | sort -g | tail -n 10
 
 clean:
-	/bin/rm certs/* ca-certs/* ca-certs-txt/* is_cert_valid.log is_self_signed.log
+	/bin/rm certs/* ca-certs/* ca-certs-txt/* is_cert_valid.log is_self_signed.log || true
 	/bin/rmdir certs ca-certs ca-certs-txt
 
