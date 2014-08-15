@@ -7,7 +7,7 @@ use warnings;
 use IPC::Open2;
 
 push(@INC, ".");
-use PortableTime qw(timelocal timegm);
+use PortableTime qw(timelocal timegm localtime gmtime);
 
 require Exporter;
 our @ISA = qw(Exporter);
@@ -261,7 +261,7 @@ sub check_exp {
 
     print "Certificate Subject: '$cert->{'subject'}'\n" if $o->verbose;
 
-    my ($c,$e) = ( scalar localtime($cert->{'created'}) , scalar localtime($cert->{'expires'}) );
+    my ($c,$e) = ( scalar gmtime($cert->{'created'}) , scalar gmtime($cert->{'expires'}) );
     print "Created: $c\n" if $o->verbose >= 2;
     print "Expires: $e\n" if $o->verbose >= 2;
 
@@ -295,7 +295,7 @@ sub extract_time {
     # Jun 23 12:14:45 2019 GMT
     if ( $datetime =~ /^(\w+)\s+(\d+)\s+(\d+):(\d+):(\d+)\s+(\d+)\s+(\w+)$/ ) {
         my ($month, $day, $hour, $min, $sec, $year, $loc) = ($1, $2, $3, $4, $5, $6, $7);
-        #print STDERR "$0: Time found (mon $month d $day h $hour m $min s $sec y $year l $loc)\n" if $VERBOSE >= 3;
+        print STDERR "$0: Time found (mon $month d $day h $hour m $min s $sec y $year l $loc)\n" if $VERBOSE >= 3;
 
         #my $t = timelocal( $sec, $min, $hour, $day, $mon{$month}, $year );
         my $t = timegm( $sec, $min, $hour, $day, $mon{$month}, $year );

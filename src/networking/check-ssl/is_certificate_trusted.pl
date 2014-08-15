@@ -88,11 +88,11 @@ sub main {
                 my $tmpcert = CertUtils->new;
                 my @tmpcerts = $tmpcert->download_issuer($cai)->certificates;
 
-                for ( @tmpcerts ) {
-                    $tmpcert->check_exp($_);
+                foreach my $cert ( @tmpcerts ) {
+                    $tmpcert->check_exp($cert);
 
-                    push(@tmpissuer, $_);
-                    print "Found Issuer Subject: '$_->{'subject'}'\n" if $VERBOSE;
+                    push(@tmpissuer, $cert);
+                    print "Found Issuer Subject: '$cert->{'subject'}'\n" if $VERBOSE;
                     last;
                 }
             }
